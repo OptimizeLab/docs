@@ -34,10 +34,10 @@ $ GOROOT=`pwd`/..; $GOROOT/bin/go test bytes -v -bench ^BenchmarkEqual$ -run ^$ 
 goos: linux
 goarch: arm64
 pkg: bytes
-BenchmarkEqual/0-8      		500000000               3.84 ns/op
-BenchmarkEqual/1-8      		300000000               5.44 ns/op       183.74 MB/s
-BenchmarkEqual/6-8      		100000000               10.0 ns/op       598.26 MB/s
-BenchmarkEqual/9-8      		100000000               12.4 ns/op       728.51 MB/s
+BenchmarkEqual/0-8              500000000               3.84 ns/op
+BenchmarkEqual/1-8              300000000               5.44 ns/op       183.74 MB/s
+BenchmarkEqual/6-8              100000000               10.0 ns/op       598.26 MB/s
+BenchmarkEqual/9-8              100000000               12.4 ns/op       728.51 MB/s
 BenchmarkEqual/15-8             100000000               17.0 ns/op       880.77 MB/s
 BenchmarkEqual/16-8             100000000               17.8 ns/op       901.06 MB/s
 BenchmarkEqual/20-8             100000000               20.9 ns/op       956.05 MB/s
@@ -48,7 +48,72 @@ BenchmarkEqual/64M-8                   20           53439570 ns/op      1255.79 
 PASS
 ok      bytes   18.907s
 ```
-##### 2.2.2 分析
+保存上面输出的性能测试结果，我们将在最后的结果验证中，与优化的结果进行对比。
+#### 2.2.2  pprof工具进行性能分析
+在上一步的 go test 命令中，我们使用了 "-cpuprofile=cpu.out" 的参数，运行期间的 cup 性能分析报告将会输出到 cpu.out 中。通过 go 提供的性能分析工具 pprof ，我们可以轻松查看并分析测试过程中对 cup 性能消耗大的函数。
+```bash
+$ go tool pprof cpu.out
+File: bytes.test
+Type: cpu
+Time: Apr 16, 2020 at 6:20pm (CST)
+Duration: 19.97s, Total samples = 19.93s (99.81%)
+Entering interactive mode (type "help" for commands, "o" for options)
+(pprof) top 3
+Showing nodes accounting for 19.75s, 99.10% of 19.93s total
+Dropped 14 nodes (cum <= 0.10s)
+Showing top 3 nodes out of 8
+      flat  flat%   sum%        cum   cum%
+    14.32s 71.85% 71.85%     14.32s 71.85%  bytes.Equal /home/chan/go/src/runtime/asm_arm64.s
+     4.06s 20.37% 92.22%     17.49s 87.76%  bytes_test.bmEqual.func1 /home/chan/go/src/bytes/bytes_test.go
+     1.37s  6.87% 99.10%      2.31s 11.59%  bytes_test.BenchmarkEqual.func1 /home/chan/go/src/bytes/bytes_test.go
+```
+此处 "top 3" 列出了 cup 消耗前3的函数。其中各项含义如下：
+- flat：当前函数占用CPU的耗时  
+- flat%: 当前函数占用CPU的耗时百分比  
+- sun%：函数占用CPU的耗时累计百分比  
+- cum：当前函数加上调用当前函数的函数占用CPU的总耗时  
+- cum%：当前函数加上调用当前函数的函数占用CPU的总耗时百分比  
+- 最后一列：函数名称  
+
+我们通过 pprof 的list命令可以查看bytes.Equal方法内部的详细耗时信息：
+```bash
+(pprof) list bytes.Equal
+Total: 19.93s
+ROUTINE ======================== bytes.Equal in /home/xxx/go/src/runtime/asm_arm64.s
+    14.32s     14.32s (flat, cum) 71.85% of Total
+         .          .    865:   MOVD    R0, ret+24(FP)
+         .          .    866:   RET
+         .          .    867:
+         .          .    868:// TODO: share code with memequal?
+         .          .    869:TEXT bytes·Equal(SB),NOSPLIT,$0-49
+     140ms      140ms    870:   MOVD    a_len+8(FP), R1
+     410ms      410ms    871:   MOVD    b_len+32(FP), R3
+      70ms       70ms    872:   CMP     R1, R3          // unequal lengths are not equal
+         .          .    873:   BNE     notequal
+     490ms      490ms    874:   MOVD    a+0(FP), R0
+     300ms      300ms    875:   MOVD    b+24(FP), R2
+         .          .    876:   ADD     R0, R1          // end
+         .          .    877:loop:
+     2.63s      2.63s    878:   CMP     R0, R1
+      10ms       10ms    879:   BEQ     equal           // reaches the end
+     5.72s      5.72s    880:   MOVBU.P 1(R0), R4
+        4s         4s    881:   MOVBU.P 1(R2), R5
+         .          .    882:   CMP     R4, R5
+      40ms       40ms    883:   BEQ     loop
+         .          .    884:notequal:
+         .          .    885:   MOVB    ZR, ret+48(FP)
+         .          .    886:   RET
+         .          .    887:equal:
+     380ms      380ms    888:   MOVD    $1, R0
+     130ms      130ms    889:   MOVB    R0, ret+48(FP)
+         .          .    890:   RET
+         .          .    891:
+         .          .    892:TEXT runtime·return0(SB), NOSPLIT, $0
+         .          .    893:   MOVW    $0, R0
+         .          .    894:   RET
+```
+从上面的结果可以看到，bytes.Equal 的实际处理代码已经指向了runtime包中的汇编文件 asm_arm64.s
+##### 2.2.3 源码分析
 优化前的代码使用Golang汇编编写，实现在src/runtime/asm_arm64.s中，如下所示：
 ```go
 //func Equal(a, b []byte) bool
@@ -100,10 +165,10 @@ SIMD寄存器支持字节B、半字H、字S、双字D四种数据格式用于数
 
 SIMD指令| 用法 | 含义
 ---|---|---
-VLD1 | VLD1 { <Vt>.<T>..<Vt4>.<T> }, [<Rn>]  |  SIMD加载指令，加载内存数据到寄存器，支持加载到1~4个SIMD寄存器
-VCMEQ | VCMEQ <Vd>.<T>, <Vn>.<T>, <Vm>.<T> |  SIMD比较指令，比较寄存器Vd和Vn的每个bit位，并保存结果寄存器Vm，若相等保存1，否则保存0
-VADD | VADD <Vd>.<T>, <Vn>.<T>, <Vm>.<T> | SIMD与运算指令，Vd和Vn寄存器的bit位做与运算，并保存结果到寄存器Vm
-VMOV | VMOV <Vd>.<T>, <Vn>.<T> | SIM转移指令，将源SIMD寄存器中的向量复制到目标SIMD寄存器中
+VLD1 | `VLD1 { <Vt>.<T>..<Vt4>.<T> }, [<Rn>]` |  SIMD加载指令，加载内存数据到寄存器，支持加载到1~4个SIMD寄存器
+VCMEQ | `VCMEQ <Vd>.<T>, <Vn>.<T>, <Vm>.<T>` |  SIMD比较指令，比较寄存器Vd和Vn的每个bit位，并保存结果寄存器Vm，若相等保存1，否则保存0
+VADD | `VADD <Vd>.<T>, <Vn>.<T>, <Vm>.<T>` | SIMD与运算指令，Vd和Vn寄存器的bit位做与运算，并保存结果到寄存器Vm
+VMOV | `VMOV <Vd>.<T>, <Vn>.<T>` | SIMD转移指令，将源SIMD寄存器中的向量复制到目标SIMD寄存器中
 
 ##### 3.2.3 优化后的汇编代码详解
     
@@ -201,19 +266,21 @@ not_equal:
 #### 4.1 编译并执行性能测试用例
 在进行了上面的汇编代码优化后，我们需要进行源码编译，使改进应用到go中。
 ```bash
-$ cd {你的Go源码目录}/src
+# 切换到优化后的分支
+$ git checkout after-simd
+
 # 从源码编译 Go
 $ bash make.bash 
    
 # 设置临时环境变量（仅在本条命令中有效），并使用新编译的 Go 执行测试用例
-$ GOROOT=`pwd`/..; $GOROOT/bin/go test bytes -v -bench ^BenchmarkEqual$ -run ^$ 
+$ GOROOT=`pwd`/..; $GOROOT/bin/go test bytes -v -bench ^BenchmarkEqual$ -run ^$ -cpuprofile=cpu.out 
 goos: linux
 goarch: arm64
 pkg: bytes
-BenchmarkEqual/0-8      		500000000                3.63 ns/op
-BenchmarkEqual/1-8      		300000000                5.41 ns/op      184.67 MB/s
-BenchmarkEqual/6-8      		200000000                6.17 ns/op      972.19 MB/s
-BenchmarkEqual/9-8      		200000000                6.56 ns/op     1372.18 MB/s
+BenchmarkEqual/0-8              500000000                3.63 ns/op
+BenchmarkEqual/1-8              300000000                5.41 ns/op      184.67 MB/s
+BenchmarkEqual/6-8              200000000                6.17 ns/op      972.19 MB/s
+BenchmarkEqual/9-8              200000000                6.56 ns/op     1372.18 MB/s
 BenchmarkEqual/15-8             200000000                7.39 ns/op     2029.41 MB/s
 BenchmarkEqual/16-8             300000000                5.86 ns/op     2730.86 MB/s
 BenchmarkEqual/20-8             200000000                7.53 ns/op     2655.50 MB/s
@@ -223,6 +290,8 @@ BenchmarkEqual/4M-8                  3000              417753 ns/op    10040.15 
 BenchmarkEqual/64M-8                  200             6693341 ns/op    10026.21 MB/s
 PASS
 ok      bytes   22.805s
+```
+同样，我们可以利用 pprof 工具查看优化后的cpu性能消耗，此处不做赘述
 ```
 #### 4.2 对比运行结果
 我们综合一下优化之前的数据，将结果统计到下表中，已便于我们查看  
