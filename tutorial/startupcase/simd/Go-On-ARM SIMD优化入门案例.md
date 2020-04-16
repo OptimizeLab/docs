@@ -48,7 +48,40 @@ BenchmarkEqual/64M-8                   20           53439570 ns/op      1255.79 
 PASS
 ok      bytes   18.907s
 ```
-
+##### 2.2.2 分析
+优化前的代码使用Golang汇编编写，实现在src/runtime/asm_arm64.s中，如下所示：
+```go
+//func Equal(a, b []byte) bool
+TEXT bytes·Equal(SB),NOSPLIT,$0-49
+	MOVD	a_len+8(FP), R1
+	MOVD	b_len+32(FP), R3
+	CMP	R1, R3		// unequal lengths are not equal
+	BNE	notequal
+	MOVD	a+0(FP), R0
+	MOVD	b+24(FP), R2
+	ADD	R0, R1		// end
+loop:
+	CMP	R0, R1
+	BEQ	equal		// reaches the end
+	MOVBU.P	1(R0), R4
+	MOVBU.P	1(R2), R5
+	CMP	R4, R5
+	BEQ	loop
+notequal:
+	MOVB	ZR, ret+48(FP)
+	RET
+equal:
+	MOVD	$1, R0
+	MOVB	R0, ret+48(FP)
+	RET
+```
+该函数的定义在文件src/bytes/bytes_decl.go中，定义如下所示
+```go
+func Equal(a, b []byte) bool
+```
+参数a, b是两个切片数组，该函数按顺序挨个比较两个数组中的元素是否相等，相等返回true. 
+优化前代码逻辑简析见下图：
+![image](images/SIMDEqualAnalysis.png) 
 ### 4. 结果验证
 #### 4.1 编译并执行性能测试用例
 在进行了上面的汇编代码优化后，我们需要进行源码编译，使改进应用到go中。
