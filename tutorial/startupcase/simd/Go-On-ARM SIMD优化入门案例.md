@@ -51,7 +51,7 @@ ok      bytes   18.907s
 ##### 2.2.2 分析
 优化前的代码使用Golang汇编编写，实现在src/runtime/asm_arm64.s中，如下所示：
 ```go
-//Equal(a, b unsafe.Pointer, size uintptr) bool
+//func Equal(a, b []byte) bool
 TEXT bytes·Equal(SB),NOSPLIT,$0-49
 	MOVD	a_len+8(FP), R1
 	MOVD	b_len+32(FP), R3
