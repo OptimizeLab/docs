@@ -1,9 +1,9 @@
 # Go-On-ARM SIMD优化入门案例
 ### 1. 环境配置
 ### 2. 什么是SIMD
-SIMD技术全称Single Instruction Multiple Data，即单指令多数据流，通过单条指令并行操作一组数据替换原来的多条指令或循环操作，实现性能提升。ARM64支持的SIMD指令数约400个左右，包含数据加载和存储、数据处理、压缩、加解密等。ARM64包含32个SIMD向量寄存器用于SIMD操作，可以批量加载一组数据到向量寄存器中，使用SIMD指令对向量寄存器中的数据运算后，批量存到内存。SIMD技术常用于多媒体、数学库、加解密算法库等包含循环处理数组元素的场景，通过SIMD指令和向量寄存器的帮助减少其中数据加载和存储、数学运算、逻辑运算、移位等常用操作所需的指令条数。那什么时候可以使用SIMD进行优化呢？
+SIMD技术全称Single Instruction Multiple Data，即单指令多数据流，通过单条指令并行操作一组数据替换原来的多条指令或循环操作，实现性能提升。ARM64支持的SIMD指令数约400个左右，包含数据加载和存储、数据处理、压缩、加解密等。ARM64包含32个SIMD向量寄存器用于SIMD操作，可以批量加载一组数据到向量寄存器中，使用SIMD指令对向量寄存器中的数据运算后，批量存到内存。SIMD技术常用于多媒体、数学库、加解密算法库等包含循环处理数组元素的场景，通过SIMD指令和向量寄存器的帮助减少其中数据加载和存储、数学运算、逻辑运算、移位等常用操作所需的指令条数。
 ### 3. 使用SIMD优化byte切片的equal操作
-从SIMD的介绍可以看出，SIMD适用于大量重复、简单的运算。在这里我们选取Golang官方的一个SIMD优化案例来进行介绍，该CL地址为：
+上节简单介绍了SIMD的原理及使用场景，下面我们选取Golang官方的一个SIMD优化案例来具体讲解，该案例的CL链接为：
 https://go-review.googlesource.com/c/go/+/71110
 #### 3.1 代码获取
 我们打开CL页面找到优化前后的Commit ID，如图  
@@ -51,7 +51,7 @@ ok      bytes   18.907s
 ```
 保存上面输出的性能测试结果，我们将在最后的结果验证中，与优化的结果进行对比。
 #### 3.2.2  pprof工具进行性能分析
-在上一步的 go test 命令中，我们使用了 "-cpuprofile=cpu.out" 的参数，运行期间的 cup 性能分析报告将会输出到 cpu.out 中。通过 go 提供的性能分析工具 pprof ，我们可以轻松查看并分析测试过程中对 cpu 性能消耗大的函数。
+在上一步的 go test 命令中，我们使用了 "-cpuprofile=cpu.out" 的参数，运行期间的 cpu 性能分析报告将会输出到 cpu.out 中。通过 go 提供的性能分析工具 pprof ，我们可以轻松查看并分析测试过程中对 cpu 性能消耗大的函数。
 ```bash
 $ go tool pprof cpu.out
 File: bytes.test
@@ -113,7 +113,7 @@ ROUTINE ======================== bytes.Equal in /home/xxx/go/src/runtime/asm_arm
          .          .    893:   MOVW    $0, R0
          .          .    894:   RET
 ```
-从上面的结果可以看到，bytes.Equal 的实际处理代码已经指向了runtime包中的汇编文件 asm_arm64.s，可以看到主要的耗时热点是CMP指令和MOVBU.P指令执行
+上面结果展示的是bytes.Equal汇编代码的耗时情况，该汇编代码在runtime包的asm_arm64.s文件中，可以看到主要的耗时热点是CMP指令和MOVBU.P指令
 ##### 3.2.3 源码分析
 优化前的代码使用Golang汇编编写，实现在src/runtime/asm_arm64.s中，如下所示：
 ```go
