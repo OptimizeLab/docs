@@ -6,7 +6,7 @@ Go语言开发包是go语言的实现，内容包括版本的语法、编译、�
 
 1.2 下载打开页面之后根据自己的需求选择对应平台下载，本次安装选择的是linux平台arm架构下64位安装。如下图所示：
 
-![image-20200416180333251](C:\Users\liziqiang\AppData\Roaming\Typora\typora-user-images\image-20200416180333251.png)
+![image-20200416180333251](images\image-20200416180333251.png)
 
 1.3 进入你的linux平台，进入你存放安装包的目录下，输入命令：
 
@@ -16,7 +16,7 @@ wget https://dl.google.com/go/go1.14.2.linux-arm64.tar.gz
 
 进行下载，下载结果如图所示。
 
-![image-20200416181426561](C:\Users\liziqiang\AppData\Roaming\Typora\typora-user-images\image-20200416181426561.png)
+![image-20200416181426561](images\image-20200416181426561.png)
 
 1.4 执行tar解压到/usr/loacl目录下（官方推荐），得到go文件夹。
 
@@ -28,7 +28,7 @@ tar -C /usr/loacl -zxvf go1.14.2.linux-arm64.tar.gz
 
 得到go文件夹内容，结果如图所示：
 
-![image-20200417092627855](C:\Users\liziqiang\AppData\Roaming\Typora\typora-user-images\image-20200417092627855.png)
+![image-20200417092627855](images\image-20200417092627855.png)
 
 1.5 配置环境变量，输入命令：
 
@@ -71,7 +71,7 @@ func main() {
 
 1.9 使用命令：go build hello.go，来构建然后使用命令：./hello来运行。
 
-![image-20200417102621667](C:\Users\liziqiang\AppData\Roaming\Typora\typora-user-images\image-20200417102621667.png)
+![image-20200417102621667](images\image-20200417102621667.png)
 
 1.10 环境准备完成。
 
