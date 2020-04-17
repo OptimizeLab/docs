@@ -292,7 +292,6 @@ PASS
 ok      bytes   22.805s
 ```
 同样，我们可以利用 pprof 工具查看优化后的cpu性能消耗，此处不做赘述
-```
 #### 4.2 对比运行结果
 我们综合一下优化之前的数据，将结果统计到下表中，已便于我们查看  
 ![image](images/SIMDEqualResult.png)  
