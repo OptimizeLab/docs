@@ -57,7 +57,7 @@ source ~./bash_profile
 mkdir -p $GOPATH/hello && cd $GOPATH/src/hello
 ```
 
-8） 在工作目录下创建名为hello.go 的文件，使用vim，如果没有安装可以使用上传一个hello.go文件。内容如下：
+8） 在工作目录下创建名为hello.go 的文件。内容如下：
 
 ```go
 package main
