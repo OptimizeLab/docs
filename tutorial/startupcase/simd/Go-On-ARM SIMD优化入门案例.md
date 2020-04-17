@@ -1,5 +1,81 @@
 # Go-On-ARM SIMD优化入门案例
 ### 1. 环境配置
+
+Go语言开发包是go语言的实现，内容包括版本的语法、编译、运行、标准库以及其他一些必要资源。
+
+1.1 Goland语言包官网：http://goland.org/dl/。
+
+1.2 下载打开页面之后根据自己的需求选择对应平台下载，本次安装选择的是linux平台arm架构下64位安装。如下图所示：
+
+![image-20200416180333251](C:\Users\liziqiang\AppData\Roaming\Typora\typora-user-images\image-20200416180333251.png)
+
+1.3 进入你的linux平台，进入你存放安装包的目录下，输入命令：
+
+```linux
+wget https://dl.google.com/go/go1.14.2.linux-arm64.tar.gz
+```
+
+进行下载，下载结果如图所示。
+
+![image-20200416181426561](C:\Users\liziqiang\AppData\Roaming\Typora\typora-user-images\image-20200416181426561.png)
+
+1.4 执行tar解压到/usr/loacl目录下（官方推荐），得到go文件夹。
+
+命令：
+
+```linux
+tar -C /usr/loacl -zxvf go1.14.2.linux-arm64.tar.gz
+```
+
+得到go文件夹内容，结果如图所示：
+
+![image-20200417092627855](C:\Users\liziqiang\AppData\Roaming\Typora\typora-user-images\image-20200417092627855.png)
+
+1.5 配置环境变量，输入命令：
+
+```linux
+export GOROOT=/usr/loacl/go
+export PATH=$PATH:$GOROOT/bin
+```
+
+1.6 输入以下命令就可以得到你的版本号：
+
+```linux
+go version
+```
+
+1.7 新建一个工作目录并且创建第一个工程目录：
+
+```linux
+#创建工作空间
+mkdir $HOME/go
+#编辑 ~/.bash_profile 文件
+#将你的工作目录声明到环境变量中
+export GOPATH=$HOME/go
+#保存退出后source一下
+source ~./bash_profile
+#之后创建并进入你的第一个目录
+mkdir -p $GOPATH/hello && cd $GOPATH/src/hello
+```
+
+1.8 在工作目录下创建名为hello.go 的文件，使用vim，如果没有安装可以使用上传一个hello的go文件或。内容如下：
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+	fmt.Printf("hello, world\n")
+}
+```
+
+1.9 使用命令：go build hello.go，来构建然后使用命令：./hello来运行。
+
+![image-20200417102621667](C:\Users\liziqiang\AppData\Roaming\Typora\typora-user-images\image-20200417102621667.png)
+
+1.10 环境准备完成。
+
 ### 2. 什么是SIMD
 SIMD技术全称Single Instruction Multiple Data，即单指令多数据流，通过单条指令并行操作一组数据替换原来的多条指令或循环操作，实现性能提升。ARM64支持的SIMD指令数约400个左右，包含数据加载和存储、数据处理、压缩、加解密等。ARM64包含32个SIMD向量寄存器用于SIMD操作，可以批量加载一组数据到向量寄存器中，使用SIMD指令对向量寄存器中的数据运算后，批量存到内存。SIMD技术常用于多媒体、数学库、加解密算法库等包含循环处理数组元素的场景，通过SIMD指令和向量寄存器的帮助减少其中数据加载和存储、数学运算、逻辑运算、移位等常用操作所需的指令条数。那什么时候可以使用SIMD进行优化呢？
 ### 3. 使用SIMD优化byte切片的equal操作
@@ -173,7 +249,7 @@ VADD | `VADD <Vd>.<T>, <Vn>.<T>, <Vm>.<T>` | SIMD与运算指令，Vd和Vn寄存
 VMOV | `VMOV <Vd>.<T>, <Vn>.<T>` | SIMD转移指令，将源SIMD寄存器中的向量复制到目标SIMD寄存器中
 
 ##### 4.2.3 优化后的汇编代码详解
-    
+
 ```go
 // input:
 // R0: pointer a
@@ -263,7 +339,7 @@ not_equal:
 	RET
 ```
 上述优化代码中，使用VLD1数据加载指令一次加载64byte数据到SIMD寄存器，再使用VCMEQ指令比较SIMD寄存器保存的数据内容得到结果，相比传统用的单字节比较方式，大大提高了大于64byte数据块的比较性能。大于16byte小于64byte块数据，使用一个SIMD寄存器一次处理16byte块的数据，小于16byte数据块使用普通寄存器保存数据，一次比较8\4\2\1byte的数据块。
- 
+
 ### 5. 结果验证
 #### 5.1 编译并执行性能测试用例
 在进行了上面的汇编代码优化后，我们需要进行源码编译，使改进应用到go中。
