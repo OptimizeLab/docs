@@ -1,5 +1,5 @@
 # 使用SIMD优化Golang汇编代码
-### 1. SIMD使用场景
+### 1. byte数组比较的性能问题
 在Golang源码src/runtime/asm_arm64.s中曾经使用如下一段byte数组比较的代码：
 ```assembly
 loop:
