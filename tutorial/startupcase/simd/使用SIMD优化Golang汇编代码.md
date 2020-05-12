@@ -1,24 +1,46 @@
 # 使用SIMD优化Golang汇编代码
 ### 1. byte数组比较的性能问题
-在Golang源码src/runtime/asm_arm64.s中曾经使用如下一段byte数组比较的代码：
-```assembly
-loop:
-    CMP R0, R1              //判断是否到了数组a末尾
-    BEQ equal               //调转到equal
-    MOVBU.P 1(R0), R4       //从数组a中取一个byte加载到通用寄存器R4中
-    MOVBU.P 1(R2), R5       //从数组b中取一个byte加载到通用寄存器R5中
-    CMP R4, R5              //比较寄存器R4、R5中的值
-    BEQ loop                //相等则继续下一轮循环操作  
+在我们的项目管理系统中会存储文件中的一些信息，有时我们需要将这些信息以[]byte数组的形式进行比较，判断是否相等，我们实现了如下的算法:
+```go
+func EqualByteArrAB(a, b []byte) bool {
+    if len(a) != len(b) {       //长度不等则返回false
+        return false
+    }
+    for i, _ := range a {
+        if a[i] != b[i] {       //按顺序比较数组a和数组b中的每个byte
+            return false
+        }
+    }
+    return true
+}
 ```
-这段代码按顺序循环从两个byte数组中取一个byte进行比较，不相等或到达末尾则结束比较。粗看似乎没有什么问题，但是对于性能要求较高的同学可能就有意见了，难道每轮循环只能比较一个byte吗？答案当然是否定的。
+在实际使用中我们发现随着数据增长，算法的性能变得非常差，影响了我们的正常使用，如下benchmark结果所示：
+```bash
+goos: linux
+goarch: arm64
+pkg: test_obj/testbyteequal
+BenchmarkEqual/0-8             330669548                3.64 ns/op
+BenchmarkEqual/1-8             227632882                5.27 ns/op           189.74 MB/s
+BenchmarkEqual/6-8             132229749                9.09 ns/op           660.35 MB/s
+BenchmarkEqual/9-8             100000000                10.1 ns/op           893.80 MB/s
+BenchmarkEqual/15-8             83173801                14.4 ns/op          1041.32 MB/s
+BenchmarkEqual/16-8             79955283                15.0 ns/op          1069.79 MB/s
+BenchmarkEqual/20-8             67353938                17.8 ns/op          1124.26 MB/s
+BenchmarkEqual/32-8             45706566                26.2 ns/op          1219.49 MB/s
+BenchmarkEqual/4K-8               421956                2844 ns/op          1440.18 MB/s
+BenchmarkEqual/4M-8                  334             3496666 ns/op          1199.52 MB/s
+BenchmarkEqual/64M-8                  18            66481026 ns/op          1009.44 MB/s
+```
+正当我们束手无策的时候，我们发现在Golang官方源码中有一个EqualBytes函数优化案例，很好的解决了我们的性能问题，优化前的Equal函数跟我们的实现逻辑完全一致，唯一的区别是在实现层面，我们使用Golang语言，而优化方案是使用[Golang汇编](https://golang.org/doc/asm)，优化前的汇编函数和我们的代码对比如下，可以理解为是对等的：
+![image](images/image-code-compare.png)
 
-### 2. 使用SIMD优化
-其实已有开源贡献者帮我们做了优化，下面是Golang官网上的优化CL：[bytes: add optimized Equal for arm64](https://go-review.googlesource.com/c/go/+/71110)
+### 2. 使用SIMD技术优化byte数组比较的性能问题
+该优化由开源贡献者提供，是Golang官网上的优化CL：[bytes: add optimized Equal for arm64](https://go-review.googlesource.com/c/go/+/71110)
 - 该优化使用了[SIMD技术](https://en.wikipedia.org/wiki/SIMD)
-- 环境配置请参考案例[Golang 在ARM64开发环境配置](../del-env-pre/del-env-pre.md)  
+- 环境配置请参考案例[Golang在ARM64开发环境配置](../del-env-pre/del-env-pre.md)  
 
 #### 2.1 SIMD优化前后对比  
-如下是使用SIMD技术优化前后的对比图，优化前后的代码都是使用Golang汇编编写，从图中可以看到优化前代码非常简单，循环取1byte进行比较，使用SIMD指令优化后，代码变得非常复杂，主要是因为对代码进行了特殊情况分块处理，首先循环处理64byte大小的分块，当数组末尾不足64byte时，再将余下的按16byte分块处理，直到余下长度为1时的情况，详情请看下节源码和注释。
+如下是使用SIMD技术优化前后的对比图，优化前后的代码都是使用Golang汇编编写，从图中可以看到优化前代码非常简单，循环取1byte进行比较，使用SIMD指令优化后，代码变得非常复杂，这里可以先避免陷入细节，分块理解代码，变复杂的主要原因是对代码进行了分情况的分块处理，首先循环处理64byte大小的分块，当数组末尾不足64byte时，再将余下的按16byte分块处理，直到余下长度为1时的情况，详情请看下节源码和注释。
 ![image](images/simd-compare.png)  
     
 #### 2.2 优化前代码详解
