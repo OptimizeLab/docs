@@ -1,82 +1,101 @@
-# Go-On-ARM Cache优化入门案例
-
-### 1. 什么是Cache
-本文所指的Cache是指在CPU和内存之间使用的，用于缓解CPU和内存之间速度差距的一种小而高速的缓存器。包含L1、L2、L3，通常L1和L2是每个Core独有的，L3由多Core‘共享，速度上L1>L2>L3，但在存储空间上L1<L2<L3，L1包含指令缓存和数据缓存，分别用于缓存指令和数据
-#### 1.1 ARM64的Cache
-![image](images/go-on-arm-cache-lscpu.png)  
-这是在笔者机器上通过命令lscpu展示的CPU相关信息，可以看到
-L1指令和数据缓存大小分别为64KB，L2缓存为512KB，L3缓存为32768KB
-- 下图是ARM处理器的Cache层次体系
-
-![image](images/go-on-arm-cache-armarc.png)  
-可以看到CPU是直接从L1获取数据和指令的，如果发生Cache Miss则会去下一级的L2继续找寻数据，直到内存
-#### 1.2 Cache Line 
-在Cache和内存间数据传输并不是每次只读取一个字节，而是以Cache line为单位，笔者机器的Cache line大小为64B，在我们优化时，要结合Cache line考虑内存对齐问题，尽量将运算所需的数据集中在少量Cache line范围内，减少加载次数
-#### 1.3 Cache 的替换和写操作策略
-如上所述，与CPU直接交互的L1大小64KB，这个是很容易占满的，当空间占满时会进行替换，常用的替换算法包括先进先出FIFO，最不经常使用LFU，最近最久未使用LRU，随机替换等。实际处理器设计中的替换策略会更复杂。
-Cache的写策略是指发生对Cache的更改时如何和内存中的数据保持一致，包含写回法，写直达法和写一次法等
-### 2. Cache优化案例
-#### 2.1 Dgemm矩阵乘法
-我们用一个双精度通用矩阵乘法(Dgemm)的优化来展示如何合理使用Cache提升性能，如下是一个矩阵乘法 matrix_c = matrix_a * matrix_b + matrix_c，参数是一维矩阵的形式，a矩阵中i行
-j列的元素值为a[i+j*n]，n表示矩阵的维数。
+# 基于CPU Cache优化双精度通用矩阵乘法
+###环境准备
+- [Golang发行版安装 >= 1.12](https://golang.org/dl/)
+- 硬件配置：鲲鹏(ARM64)服务器
+### 1. Dgemm矩阵乘法性能问题
+深度学习的卷积神经网络本质就是矩阵的运算，因此矩阵运算的性能直接影响深度学习的应用场景，本文基于一个双精度通用[矩阵乘法(Dgemm)](https://zh.wikipedia.org/wiki/%E7%9F%A9%E9%99%A3%E4%B9%98%E6%B3%95)函数介绍如何利用CPU Cache技术优化性能，函数实现如下:
 ```go
 func Dgemm(a []float64, b []float64, c []float64, n int) {
-	for i := 0; i < n; i++ {
-		for j := 0; j < n; j++ {
-			cij := c[i+j*n]
-			for k := 0; k < n; k++ {
-				cij += a[i+k*n] * b[k+j*n]
-			}
-			c[i+j*n] = cij
-		}
-	}
+    for i := 0; i < n; i++ {
+        for j := 0; j < n; j++ {
+            cij := c[i+j*n]
+            for k := 0; k < n; k++ {
+            	cij += a[i+k*n] * b[k+j*n]
+            }
+            c[i+j*n] = cij
+        }
+    }
 }
 ```
-矩阵运算如图所示：
+上述代码基于数学公式matrix_c = matrix_a * matrix_b + matrix_c，输入参数包含3个n*n的矩阵(a b c)，n表示矩阵维度，矩阵采用一维数组的形式，比如矩阵a中i行j列的元素值为a[i+j*n]。运算结果存储在矩阵c中，下图是矩阵运算的原理图：
 ![image](images/go-on-arm-cache-matrixmul.png)  
-函数Dgemm中包含三个矩阵，a，b，c，我们按行列都为512计算，每个元素都是float64=8B，估算出三个矩阵所需内存大小为 
+通过benchmark获得的性能数据，发现随着矩阵维度增长，性能下降非常大，当维度达到1024时，单核运行需要10s：
 ```bash
-3 * (512 * 512) * 8B = 6144kb = 6MB
+goos: linux
+goarch: arm64
+pkg: test_obj/testdgemm
+BenchmarkDgemm-32*32                       100               0.056 ms/op
+BenchmarkDgemm-64*64                       100               0.502 ms/op
+BenchmarkDgemm-128*128                     100               4.667 ms/op
+BenchmarkDgemm-256*256                     100              69.864 ms/op
+BenchmarkDgemm-512*512                     100                0.998 s/op
+BenchmarkDgemm-1024*1024                   100               10.131 s/op
 ```
-使用benchmark在我们机器上执行大概需要0.998 s
-#### 2.2 分块优化示例
-注意到，我们的机器上L1 Cache的容量为64KB，6MB是远大于64KB的，因此在L1 Cache无法保存全部矩阵元素的情况下，L1中会出现大量的替换操作，即部分数据被加载进L1参与运算后，按照替换算法被换出，但在后续执行中再次被换入L1参与运算的情况，为减少这种情况，我们通过矩阵分块的思路进行优化
-- 代码如下：
+### 2. 根因分析
+从算法的空间复杂度进行评估，每次运算包含3个矩阵，矩阵的维度是n，每个元素大小为float64=8B，按如下公式粗略计算参数占用的空间：
+```bash
+spaces = 3 * (n * n) * 8B
+```
+得出矩阵维度和占用空间的关系：
+```bash
+矩阵维数n         矩阵占用的空间      
+32                   24KB
+64                   96KB
+128                 384KB
+256                 1.5MB
+512                   6MB
+1024                 24MB
+```
+CPU在执行运算时直接操作[CPU Cache](https://zh.wikipedia.org/wiki/CPU%E7%BC%93%E5%AD%98)中的数据，矩阵乘法运算是由行乘列组成的，因此CPU在运算时需要将矩阵数据加载进CPU的Cache中，当空间不足时，Cache会基于替换算法(如LRU)替换Cache缓存的数据，通过命令lscpu可以展示服务器的CPU信息，如下表格是本文所用鲲鹏服务器的三级CPU Cache信息：
+```bash
+Cache名称               空间
+L1d Cache(数据)         64KB
+L1i Cache(指令)         64KB
+L2  Cache              512KB
+L3  Cache              32768KB
+```
+- 关于CPU Cache的进一步理解可以参考[linux系统之arm架构的CPU与Cache](https://blog.csdn.net/eleven_xiy/article/details/70344594)
+
+测试服务器上L1 Cache的容量为64KB，因此当矩阵参数占用空间超过64KB时，L1将无法保存全部矩阵元素，出现Cache替换，比如矩阵的某一行数据matrix_a_line_n被加载进L1参与运算后，在运算的某个阶段，由于L1空间占满，按照替换算法被换出，但在后续运算中由于再次用到，matrix_a_line_n被重新加载进L1，本质上是由于CPU Cache空间不足导致的Cache Miss。
+### 3. 分块矩阵乘法优化
+为了证实上述分析，提高CPU Cache的命中率，减少运算中Cache数据的换入换出，使用[分块矩阵乘法](https://zh.wikipedia.org/wiki/%E5%88%86%E5%A1%8A%E7%9F%A9%E9%99%A3)重构上述代码如下：
 ```go
 const blockSize int = 32
-
-func opBlock(n, si, sj, sk int, a, b, c []float64) {
-	for i := si; i < si + blockSize; i++ {
-		for j := sj; j < sj + blockSize; j++ {
-			cij := c[i+j*n]
-			for k := sk; k < sk + blockSize; k++ {
-				cij += a[i+k*n] * b[k+j*n]
-			}
-			c[i+j*n] = cij
-		}
-	}
+//分块矩阵乘法
+func BlockMul(n, si, sj, sk int, a, b, c []float64) {
+    for i := si; i < si + blockSize; i++ {
+        for j := sj; j < sj + blockSize; j++ {
+            cij := c[i+j*n]
+            for k := sk; k < sk + blockSize; k++ {
+                cij += a[i+k*n] * b[k+j*n]
+            }
+            c[i+j*n] = cij
+        }
+    }
 }
-
-func DgemmWithCache(a []float64, b []float64, c []float64, n int) {
-	for i := 0; i < n; i+= blockSize {
-		for j := 0; j < n; j+= blockSize {
-			for k := 0; k < n; k+= blockSize {
-				opBlock(n, i, j, k, a, b, c)
-			}
-		}
-	}
+//基于分块的Dgemm
+func DgemmWithBlock(a []float64, b []float64, c []float64, n int) {
+    for i := 0; i < n; i+= blockSize {
+        for j := 0; j < n; j+= blockSize {
+            for k := 0; k < n; k+= blockSize {//分块大小
+                BlockMul(n, i, j, k, a, b, c)
+            }
+        }
+    }
 }
 ```
-blockSize 表示分块的大小，这里为32，即我们将矩阵拆分32 * 32的子矩阵，opBlock函数用于子矩阵运算，具体运算过程如下图，其中大写的A、B、C表示32 * 32 的子矩阵：
+blockSize 表示分块的大小，这里为32，即将矩阵拆分32 * 32的子矩阵，BlockMul函数用于子矩阵运算，具体运算过程如下图，其中大写的A、B、C表示32 * 32 的子矩阵：
+
 ![image](images/go-on-arm-cache-matrixmul-byblock.png)  
-我们可以计算opBlock函数中三个矩阵参数所需内存大小为：
+计算BlockMul函数中三个矩阵参数所需缓存空间，大小为：
 ```bash
 3 * (32 * 32) * 8B = 24kb
 ```
-注意到这个值小于L1 Cache的64KB大小，按照上文所述不会占满L1，也就是说执行opBlock函数时被操作数可以常驻L1，不存在L1中数据被替换后再加载回L1使用的情况。跑benchmark发现总用时为0.336 s，性能提升了三倍。虽然这样的拆分会增加函数调用的开销，但是显然Cache优化带来了更高的性能提升
-#### 2.3 性能对比图
+注意到这个值小于L1 Cache的64KB空间，按照上文所述不会占满L1，也就是说执行BlockMul函数时分块矩阵的数据可以常驻L1。benchmark测试维度为512的矩阵分块乘法运算，得出用时0.336 s，相比不分块性能提升了三倍。虽然这样的拆分会增加函数调用的开销，但是Cache优化带来了更高的性能提升，当然还有其他很多方法能够同时使用来进一步提升矩阵运算的速度，由于跟本文主题无关，不做展开。
+### 4. 结果验证
+本文分别验证了维度为512和1024的矩阵：
 - matrix-512*512 耗时对比图
  ![image](images/go-on-arm-cache-matrix512-result.png)
 - matrix1024*1024 耗时对比图
  ![image](images/go-on-arm-cache-matrix1024-result.png)
- 在上图中可以看到，当矩阵分块小于64 * 64时，性能提升最大，且差别不明显，当>= 64 * 64后性能逐渐下降，不分块时性能是最差的。这个结论跟我们在上述矩阵占用空间计算结果是一致的，我们得出结论：需要合理使用L1 Cache(64KB)，尽量让参与计算的数据保持在在L1空间范围内，减少数据替换后再加载回来的情况。
+ 在上图中可以看到，当矩阵分块维度< 64时，性能提升最大，且差别不明显，当分块维度>= 64后性能逐渐下降，不分块时性能是最差的。这个实验结果跟上述分析是一致的，因此得出结论：需要合理使用L1 Cache(64KB)，尽量让参与计算的数据保持在L1空间范围内，提升CPU Cache的命中率。
