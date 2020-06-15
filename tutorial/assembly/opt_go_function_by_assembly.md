@@ -1,0 +1,184 @@
+## 利用汇编优化函数的性能
+
+
+
+#### 安装包和硬件配置
+
+- [golang语言下载](https://golang.org/dl/)
+- ARM64服务器
+
+#### 1，常用函数的性能问题
+
+在math/big库中，有一个加乘函数，这个函数在多个函数中都有调用，是一个重要的基础功能函数。通过查询数学库可以发现，他的实现是调用一个函数。那么这个函数是否有提升的空间呢？我们来检测一下他的性能。
+
+我们测试了这个函数的性能优化前的数据，具体结果如图所示：
+
+```
+goos: linux
+goarch: arm64
+pkg: math/big
+BenchmarkAddMulVVW/1-8                 100000000                19.5 ns/op        3274.97 MB/s
+BenchmarkAddMulVVW/2-8                  50000000                31.1 ns/op        4114.85 MB/s
+BenchmarkAddMulVVW/3-8                  30000000                43.5 ns/op        4409.49 MB/s
+BenchmarkAddMulVVW/4-8                  30000000                55.5 ns/op        4613.55 MB/s
+BenchmarkAddMulVVW/5-8                  20000000                67.4 ns/op        4744.26 MB/s
+BenchmarkAddMulVVW/10-8                 10000000                 134 ns/op        4771.63 MB/s
+BenchmarkAddMulVVW/100-8                 1000000                1213 ns/op        5273.70 MB/s
+BenchmarkAddMulVVW/1000-8                 100000               12016 ns/op        5325.95 MB/s
+BenchmarkAddMulVVW/10000-8                 10000              122559 ns/op        5221.96 MB/s
+BenchmarkAddMulVVW/100000-8                 1000             1254703 ns/op        5100.81 MB/s
+```
+
+接下来我们来看一下这个函数的定义是如何执行的：
+
+```go
+func addMulVVW(z, x []Word, y Word) (c Word) {
+	return addMulVVW_g(z, x, y)
+}
+```
+
+可以看出，这个函数是调用了另一个函数：addMulVVW_g。我们进一步查看一下这个函数的定义以及调用的主要函数：
+
+```go
+func addMulVVW_g(z, x []Word, y Word) (c Word) {
+	for i := 0; i < len(z) && i < len(x); i++ {
+		z1, z0 := mulAddWWW_g(x[i], y, z[i])
+		lo, cc := bits.Add(uint(z0), uint(c), 0)
+		c, z[i] = Word(cc), Word(lo)
+		c += z1
+	}
+	return
+}
+
+// 返回三个数字的乘加操作
+func mulAddWWW_g(x, y, c Word) (z1, z0 Word) {
+	hi, lo := bits.Mul(uint(x), uint(y))   
+	var cc uint
+	lo, cc = bits.Add(lo, uint(c), 0)       
+	return Word(hi + cc), Word(lo)
+}
+
+// 返回x和y的全角乘积：（hi，lo）= x * y，乘积位的上半部返回hi，下半部返回lo。
+func Mul(x, y uint) (hi, lo uint) {
+	if UintSize == 32 {
+		h, l := Mul32(uint32(x), uint32(y))
+		return uint(h), uint(l)
+	}
+	h, l := Mul64(uint64(x), uint64(y))
+	return uint(h), uint(l)
+}
+
+// 加法返回带有x，y和进位的总和：sum = x + y +进位。 进位输入必须为0或1
+func Add(x, y, carry uint) (sum, carryOut uint) {
+	if UintSize == 32 {
+		s32, c32 := Add32(uint32(x), uint32(y), uint32(carry))
+		return uint(s32), uint(c32)
+	}
+	s64, c64 := Add64(uint64(x), uint64(y), uint64(carry))
+	return uint(s64), uint(c64)
+}
+```
+
+可以看出这个函数的逻辑较为简单，那么我们可以直接采用汇编的方式对函数进行实现。看一下他的性能有没有提高。
+
+#### 3，使用arm汇编优化后的代码
+
+优化后的代码在math\big\arith_arm64.s中，该代码采用汇编的方式实现函数的功能，虽然在代码行数上有一定增加，但是在执行效率上有很大的提高，如下所示：
+
+```assembly
+// func addMulVVW(z, x []Word, y Word) (c Word)
+TEXT ·addMulVVW(SB),NOSPLIT,$0
+	MOVD	z+0(FP), R1             // z -> R1
+	MOVD	z_len+8(FP), R0		    // len(z) -> R0
+	MOVD	x+24(FP), R2			// x -> R2
+	MOVD	y+48(FP), R3			// y -> R3
+	MOVD	$0, R4                  // 0 -> R4
+
+	TBZ	$0, R0, two					// 若R0[0] == 0 跳转分支two
+	MOVD.P	8(R2), R5				// 将R2寄存器上8个字节放在R5寄存器上
+	MOVD	(R1), R6				// 将R1寄存器上的值放在R6上
+	MUL	R5, R3, R7  				// R5 = R3 * R7
+	UMULH	R5, R3, R8				// 将两个64位寄存器值R3,R8的结果的位[127：64]写入64位目标寄存器R5
+	ADDS	R7, R6					// ADDS中S表示进位
+	ADC	$0, R8, R4					// 进位加法将两个寄存器值和进位标志值相加，并将结果写入目标寄存器。
+	MOVD.P	R6, 8(R1)
+	SUB	$1, R0						// R0 = R0 - 1
+
+two:
+	TBZ	$1, R0, loop				// 若R0[0] == 1跳转分支loop
+	LDP.P	16(R2), (R5, R10)		// 出栈指令,将指定长度的数据从栈读到寄存器中
+	LDP	(R1), (R6, R11)				// 出栈指令,将数据从R6,R11从栈读到寄存器R1上
+	MUL	R10, R3, R13
+	UMULH	R10, R3, R12			// 将两个64位寄存器值R3,R12的结果的位[127：64]写入64位目标寄存器R10
+	MUL	R5, R3, R7
+	UMULH	R5, R3, R8
+	ADDS	R4, R6
+	ADCS	R13, R11
+	ADC	$0, R12
+	ADDS	R7, R6
+	ADCS	R8, R11
+	ADC	$0, R12, R4
+	STP.P	(R6, R11), 16(R1)		// 入栈指令，将R6,R11存放在寄存器R1上
+	SUB	$2, R0
+	
+loop:
+	CBZ	R0, done					// 比较（Compare），如果结果为零（Zero）就转移（只能跳到后面的指令）
+	LDP.P	16(R2), (R5, R6)
+	LDP.P	16(R2), (R7, R8)
+	LDP	(R1), (R9, R10)				// 出栈指令
+	ADDS	R4, R9
+	MUL	R6, R3, R14   				// R6 = R3 * R10
+	ADCS	R14, R10
+	MUL	R7, R3, R15
+	LDP	16(R1), (R11, R12)
+	ADCS	R15, R11
+	MUL	R8, R3, R16
+	ADCS	R16, R12
+	UMULH	R8, R3, R20
+	ADC	$0, R20
+
+	MUL	R5, R3, R13
+	ADDS	R13, R9
+	UMULH	R5, R3, R17
+	ADCS	R17, R10
+	UMULH	R6, R3, R21
+	STP.P	(R9, R10), 16(R1)		// 入栈指令
+	ADCS	R21, R11
+	UMULH	R7, R3, R19
+	ADCS	R19, R12
+	STP.P	(R11, R12), 16(R1)	
+	ADC	$0, R20, R4
+
+	SUB	$4, R0						// R0 = R0 - 4
+	B	loop						// 跳转指令，跳转到loop标志位
+
+done:
+	MOVD	R4, c+56(FP)
+	RET
+```
+
+#### 4，优化后的函数的性能
+
+用arm汇编替代之后我们再看一下这个函数的性能是否发生了变化：
+
+```
+goos: linux
+goarch: arm64
+pkg: math/big
+BenchmarkAddMulVVW/1-8  				200000000                6.43 ns/op         9949.52 MB/s
+BenchmarkAddMulVVW/2-8  				200000000                7.21 ns/op        17753.50 MB/s
+BenchmarkAddMulVVW/3-8  				200000000                9.18 ns/op        20919.48 MB/s
+BenchmarkAddMulVVW/4-8  				200000000                9.61 ns/op        26644.73 MB/s
+BenchmarkAddMulVVW/5-8  				100000000                12.7 ns/op        25140.24 MB/s
+BenchmarkAddMulVVW/10-8                 100000000                16.3 ns/op        39143.89 MB/s
+BenchmarkAddMulVVW/100-8                 20000000                 102 ns/op        62315.69 MB/s
+BenchmarkAddMulVVW/1000-8                 2000000                 975 ns/op        65591.27 MB/s
+BenchmarkAddMulVVW/10000-8                 200000               11945 ns/op        53575.35 MB/s
+BenchmarkAddMulVVW/100000-8                 10000              156405 ns/op        40919.26 MB/s
+PASS
+ok      math/big        22.050s
+```
+
+我们看一下优化前后的性能对比结果：
+
+![image-20200604153905655](image/Performance_comparison.png)
