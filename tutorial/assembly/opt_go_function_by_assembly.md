@@ -11,9 +11,9 @@
 
 在math/big库中，有一个加乘函数addMulVVW，这个函数在basicMul、montgomery、basicSqr等函数中都有调用，当你进行无符号整型数组与无符号整型数的计算操作时，大概率都会用到这个函数。这是一个重要的基础功能函数。通过查询数学库可以发现，他的实现是调用一个函数。
 
-接下来我们来看一下这个函数是如何定义的：
+接下来来看一下这个函数是如何定义的：
 
-```go
+```assembly
 // func addMulVVW(z, x []Word, y Word) (c Word)
 TEXT ·addMulVVW(SB),NOSPLIT,$0
 	B ·addMulVVW_g(SB)
@@ -38,8 +38,7 @@ BenchmarkAddMulVVW/100000-8                 1000             1254703 ns/op      
 ```
 
 
-
-可以看出，这个函数是调用了另一个函数：addMulVVW_g。我们进一步查看一下这个函数的定义以及调用的主要函数：
+可以看出，这个函数是调用了另一个函数：addMulVVW_g。进一步查看一下这个函数的定义以及调用的主要函数：
 
 ```go
 func addMulVVW_g(z, x []Word, y Word) (c Word) {
@@ -81,79 +80,80 @@ func Add(x, y, carry uint) (sum, carryOut uint) {
 }
 ```
 
-可以看出这个函数的逻辑较为简单，那么我们可以直接采用汇编的方式对函数进行实现。看一下他的性能有没有提高。
+可以看出这个函数的逻辑较为简单，那么可以直接采用汇编的方式对函数进行实现。看一下他的性能有没有提高。
 
 #### 3，使用arm汇编优化后的代码
 
-优化后的代码在math\big\arith_arm64.s中，该代码采用汇编的方式实现函数的功能，虽然在代码行数上有一定增加，但是在执行效率上有很大的提高，如下所示：
+在Go语言中，汇编使用的是plan9的汇编。plan9是Go一套自己的汇编，不同于ARM汇编和X86汇编，在指令和语法上有一定的区别。关于arm64汇编和plan9汇编可以参见链接：https://9p.io/sys/doc/asm.html和https://golang.org/pkg/cmd/internal/obj/arm64/。
+优化后的代码在math\big\arith_arm64.s中，该代码采用汇编的方式实现函数的功能，在代码行数上有一定增加。在执行GO文件时，由于之前已经有了函数的汇编声明，所以会调用汇编定义的函数，在执行效率上有很大的提高如下所示：
 
 ```assembly
 // func addMulVVW(z, x []Word, y Word) (c Word)
 TEXT ·addMulVVW(SB),NOSPLIT,$0
 	MOVD	z+0(FP), R1             // z -> R1
-	MOVD	z_len+8(FP), R0		    // len(z) -> R0
-	MOVD	x+24(FP), R2			// x -> R2
-	MOVD	y+48(FP), R3			// y -> R3
+	MOVD	z_len+8(FP), R0		// len(z) -> R0
+	MOVD	x+24(FP), R2		// x -> R2
+	MOVD	y+48(FP), R3		// y -> R3
 	MOVD	$0, R4                  // 0 -> R4
 
-	TBZ	$0, R0, two					// 若R0[0] == 0 跳转分支two
-	MOVD.P	8(R2), R5				// 将R2寄存器上8个字节放在R5寄存器上
-	MOVD	(R1), R6				// 将R1寄存器上的值放在R6上
-	MUL	R5, R3, R7  				// R5 = R3 * R7
-	UMULH	R5, R3, R8				// 将两个64位寄存器值R3,R8的结果的位[127：64]写入64位目标寄存器R5
-	ADDS	R7, R6					// ADDS中S表示进位
-	ADC	$0, R8, R4					// 进位加法将两个寄存器值和进位标志值相加，并将结果写入目标寄存器。
+	TBZ	$0, R0, two		// 若R0[0] == 0 跳转分支two
+	MOVD.P	8(R2), R5		// 将R2寄存器上8个字节放在R5寄存器上
+	MOVD	(R1), R6		// 将R1寄存器上的值放在R6上
+	MUL	R5, R3, R7  		// R7 = R3 * R5
+	UMULH	R5, R3, R8		// 将两个64位寄存器值R3,R8的结果的位[127：64]写入64位目标寄存器R5
+	ADDS	R7, R6			// ADDS中S表示进位
+	ADC	$0, R8, R4		// 进位加法将两个寄存器值和进位标志值相加，并将结果写入目标寄存器R4。
 	MOVD.P	R6, 8(R1)
-	SUB	$1, R0						// R0 = R0 - 1
+	SUB	$1, R0			// R0 = R0 - 1
 
 two:
-	TBZ	$1, R0, loop				// 若R0[0] == 1跳转分支loop
-	LDP.P	16(R2), (R5, R10)		// 出栈指令,将指定长度的数据从栈读到寄存器中
-	LDP	(R1), (R6, R11)				// 出栈指令,将数据从R6,R11从栈读到寄存器R1上
+	TBZ	$1, R0, loop		// 若R0[0] == 1跳转分支loop
+	LDP.P	16(R2), (R5, R10)	// 出栈指令,将指定长度的数据从栈读到寄存器中
+	LDP	(R1), (R6, R11)		// 出栈指令,将数据从R6,R11从栈读到寄存器R1上
 	MUL	R10, R3, R13
-	UMULH	R10, R3, R12			// 将两个64位寄存器值R3,R12的结果的位[127：64]写入64位目标寄存器R10
-	MUL	R5, R3, R7
+	UMULH	R10, R3, R12		// 将两个64位寄存器值R3,R12的结果的位[127：64]写入64位目标寄存器R10
+	MUL	R5, R3, R7		// R7 = R3 * R5
 	UMULH	R5, R3, R8
-	ADDS	R4, R6
-	ADCS	R13, R11
-	ADC	$0, R12
+	ADDS	R4, R6			// R6 = R4 + R6
+	ADCS	R13, R11		// ADDS中S表示进位
+	ADC	$0, R12			// 进位加法将两个寄存器值和进位标志值相加，并将结果写入目标寄存器。
 	ADDS	R7, R6
 	ADCS	R8, R11
 	ADC	$0, R12, R4
-	STP.P	(R6, R11), 16(R1)		// 入栈指令，将R6,R11存放在寄存器R1上
-	SUB	$2, R0
+	STP.P	(R6, R11), 16(R1)	// 入栈指令，将R6,R11存放在寄存器R1上
+	SUB	$2, R0   		// R0 = R0 - 2
 	
 loop:
-	CBZ	R0, done					// 比较（Compare），如果结果为零（Zero）就转移（只能跳到后面的指令）
-	LDP.P	16(R2), (R5, R6)
-	LDP.P	16(R2), (R7, R8)
-	LDP	(R1), (R9, R10)				// 出栈指令
-	ADDS	R4, R9
-	MUL	R6, R3, R14   				// R6 = R3 * R10
-	ADCS	R14, R10
-	MUL	R7, R3, R15
+	CBZ	R0, done		// 比较（Compare），如果结果为零（Zero）就转移（只能跳到后面的指令）
+	LDP.P	16(R2), (R5, R6)	// 出栈指令,将指定长度的数据从栈读到寄存器R5,R6中
+	LDP.P	16(R2), (R7, R8)	// 出栈指令,将指定长度的数据从栈读到寄存器R7,R8中
+	LDP	(R1), (R9, R10)		// 出栈指令
+	ADDS	R4, R9			// R9 = R9 + R4,S表示进位
+	MUL	R6, R3, R14   		// R14 = R3 * R6
+	ADCS	R14, R10		// 进位加法将两个寄存器值相加，并将结果写入目标寄存器R10。
+	MUL	R7, R3, R15		// R15 = R3 * R7
 	LDP	16(R1), (R11, R12)
 	ADCS	R15, R11
-	MUL	R8, R3, R16
+	MUL	R8, R3, R16		// R16 = R3 * R8
 	ADCS	R16, R12
 	UMULH	R8, R3, R20
 	ADC	$0, R20
 
-	MUL	R5, R3, R13
-	ADDS	R13, R9
+	MUL	R5, R3, R13		// R13 = R3 * R5
+	ADDS	R13, R9			// 两个寄存器的值相加，存在R9中，S表示进位
 	UMULH	R5, R3, R17
 	ADCS	R17, R10
 	UMULH	R6, R3, R21
-	STP.P	(R9, R10), 16(R1)		// 入栈指令
+	STP.P	(R9, R10), 16(R1)	// 入栈指令
 	ADCS	R21, R11
-	UMULH	R7, R3, R19
+	UMULH	R7, R3, R19		// 将两个64位寄存器值R7,R3的结果的位[127：64]写入64位目标寄存器R19
 	ADCS	R19, R12
 	STP.P	(R11, R12), 16(R1)	
 	ADC	$0, R20, R4
 
-	SUB	$4, R0						// R0 = R0 - 4
-	B	loop						// 跳转指令，跳转到loop标志位
-
+	SUB	$4, R0			// R0 = R0 - 4
+	B	loop			// 跳转指令，跳转到loop标志位
+	
 done:
 	MOVD	R4, c+56(FP)
 	RET
@@ -161,17 +161,17 @@ done:
 
 #### 4，优化后的函数的性能
 
-用arm汇编替代之后我们再看一下这个函数的性能是否发生了变化：
+用arm汇编替代之后再看一下这个函数的性能是否发生了变化：
 
 ```
 goos: linux
 goarch: arm64
 pkg: math/big
-BenchmarkAddMulVVW/1-8  				200000000                6.43 ns/op         9949.52 MB/s
-BenchmarkAddMulVVW/2-8  				200000000                7.21 ns/op        17753.50 MB/s
-BenchmarkAddMulVVW/3-8  				200000000                9.18 ns/op        20919.48 MB/s
-BenchmarkAddMulVVW/4-8  				200000000                9.61 ns/op        26644.73 MB/s
-BenchmarkAddMulVVW/5-8  				100000000                12.7 ns/op        25140.24 MB/s
+BenchmarkAddMulVVW/1-8  		200000000                6.43 ns/op         9949.52 MB/s
+BenchmarkAddMulVVW/2-8  		200000000                7.21 ns/op        17753.50 MB/s
+BenchmarkAddMulVVW/3-8  		200000000                9.18 ns/op        20919.48 MB/s
+BenchmarkAddMulVVW/4-8  		200000000                9.61 ns/op        26644.73 MB/s
+BenchmarkAddMulVVW/5-8  		100000000                12.7 ns/op        25140.24 MB/s
 BenchmarkAddMulVVW/10-8                 100000000                16.3 ns/op        39143.89 MB/s
 BenchmarkAddMulVVW/100-8                 20000000                 102 ns/op        62315.69 MB/s
 BenchmarkAddMulVVW/1000-8                 2000000                 975 ns/op        65591.27 MB/s
@@ -181,6 +181,6 @@ PASS
 ok      math/big        22.050s
 ```
 
-我们看一下优化前后的性能对比结果：
+最后，看一下优化前后的性能对比结果：
 
 ![image-20200604153905655](image/Performance_comparison.png)
