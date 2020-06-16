@@ -1,6 +1,5 @@
 # 使用二分插入技术优化Go归并排序算法的性能
 ### 安装包和源码准备
-- [Golang发行版 1.4 && 1.5](https://golang.org/dl/)
 - [Golang源码仓库](https://go.googlesource.com/go)下载
 ```bash
 $ git clone https://go.googlesource.com/go
@@ -9,7 +8,7 @@ $ cd go/src
 - 硬件配置：鲲鹏(ARM64)服务器
 
 ### 1. Go归并排序函数的算法问题
-Golang语言的sort包内部实现了归并排序算法，是sort对外接口的底层排序算法之一。Go的归并排序算法采用递归实现归并排序的分治，递归增加了算法的时间和空间消耗，算法实现如下：
+Golang语言的sort包内部实现了归并排序算法，是sort对外接口的底层排序算法之一。在golang1.4发行版中，Go的归并排序算法采用递归实现归并排序的分治算法，而递归无疑增加了算法的时间和空间消耗，算法实现如下：
 ```go
 //优化前的代码
 func symMerge(data Interface, a, m, b int) {

@@ -9,7 +9,7 @@ $ cd go/src
 - 硬件配置：鲲鹏(ARM64)服务器
 
 ### 1. UTF8验证函数的算法问题
-Golang语言支持对UTF8编码进行验证，在使用编码校验时常使用UTF8编码验证算法对数据编码做验证。而ASCII编码检查也是使用UTF8验证函数，golang1.14发行版中的UTF8验证算法如下。每次仅验证一个byte字符是否属于ASCII编码。这导当致数据为纯ASCII编码或连续ASCII编码时，验证性能低下。
+Golang语言支持对UTF8编码进行验证，在使用编码校验时常使用UTF8编码验证算法对数据编码做验证。而ASCII编码检查也是使用UTF8验证函数，golang1.14发行版中的UTF8验证算法如下。每次仅验证一个byte字符是否属于ASCII编码。这导致当数据为纯ASCII编码或连续ASCII编码时，验证性能低下。
 ```go 
 // 优化前的utf8验证算法
 func Valid(p []byte) bool {
@@ -29,13 +29,13 @@ func Valid(p []byte) bool {
 通过分析现有的utf8算法，发现问题主要在于每次只检查一个byte字符是否属于ASCII编码，如果能够一次就比较多个byte字符是否属于ASCII编码，就能加速验证效率。而ASCII编码特点也适用于并行化验证。
 - [UTF8编码介绍](https://zh.wikipedia.org/wiki/UTF-8)
 #### 2.2 优化方案
-分析golang src/unicode/utf8/utf8.go文件源码，发现使用并行化验证ASCII编码优化UTF8验证函数是可行的，只需要在utf8函数中增加ASCII编码并行化验证即可。  
-在社区发行版1.14.3中已经对Valid函数进行了优化，修复了本文提到了utf8验证算法问题，具体的CL：[ unicode/utf8: optimize Valid and ValidString for ASCII checks ](https://go-review.googlesource.com/c/go/+/228823)，该优化方法在Valid函数开头，先做了ASCII编码并行化验证，一次检查8个ASCII字符，加快了ASCII编码的验证速度。
+分析golang src/unicode/utf8/utf8.go文件源码和ASCII编码特点，发现ASCII编码检查可以转换为验证byte字节的最高位是否为0，可以采用批量化验证ASCII编码技术提高ASCII验证的性能问题。  
+而在golang社区发行版1.14.3之后,已对Valid函数进行了优化，修复了本文提到了utf8验证算法问题，具体的CL：[ unicode/utf8: optimize Valid and ValidString for ASCII checks ](https://go-review.googlesource.com/c/go/+/228823)，该优化方法在Valid函数开头，先做了ASCII编码并行化验证，一次检查8个ASCII字符，加快了ASCII编码的验证速度。
 #### 2.3 优化前后对比
 ![image](images/cl-228823-optCompare.PNG)
 #### 2.4 优化后代码解读
 Valid函数首先检查ASCII编码，每次检查8个byte字符是否为ASCII，如果是循环检查；如果不是跳出循环，执行下面的UTF8编码检查。
-循环内，加载byte数组的8个byte到两个unit32中。ASCII编码特点：每个字符占用8个bit位，且最高位为0，任一个ASCII编码和`0x80`的与操作结果为0。所以代码`(first32|second32)&0x80808080`可以一次同时检查8个byte是否为ASCII编码。
+循环内，加载byte数组的8个byte到两个unit32`(first32|second32)`中。而ASCII编码每个字符占用8个bit位，且最高位为0，任一个ASCII编码和`0x80`的与操作结果为0，这个特性可用来检验ASCII编码。所以代码`(first32|second32)&0x80808080 != 0`可以一次批量检查8个byte是否为ASCII编码。
 ```go
 // 优化后的utf8验证代码
 func Valid(p []byte) bool {
@@ -49,7 +49,7 @@ func Valid(p []byte) bool {
 		second32 := uint32(p[4]) | uint32(p[5])<<8 | uint32(p[6])<<16 | uint32(p[7])<<24
 		if (first32|second32)&0x80808080 != 0 { // 一次检查8个ASCII编码
 			// Found a non ASCII byte (>= RuneSelf).
-			break
+			break // 如果不是ASCII编码，跳出循环体；否则继续做ASCII编码循环
 		}
 		p = p[8:]
 	}
