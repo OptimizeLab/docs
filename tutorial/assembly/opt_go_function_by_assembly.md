@@ -9,9 +9,17 @@
 
 #### 1，常用函数的性能问题
 
-在math/big库中，有一个加乘函数，这个函数在多个函数中都有调用，是一个重要的基础功能函数。通过查询数学库可以发现，他的实现是调用一个函数。那么这个函数是否有提升的空间呢？我们来检测一下他的性能。
+在math/big库中，有一个加乘函数addMulVVW，这个函数在basicMul、montgomery、basicSqr等函数中都有调用，当你进行无符号整型数组与无符号整型数的计算操作时，大概率都会用到这个函数。这是一个重要的基础功能函数。通过查询数学库可以发现，他的实现是调用一个函数。
 
-我们测试了这个函数的性能优化前的数据，具体结果如图所示：
+接下来我们来看一下这个函数是如何定义的：
+
+```go
+// func addMulVVW(z, x []Word, y Word) (c Word)
+TEXT ·addMulVVW(SB),NOSPLIT,$0
+	B ·addMulVVW_g(SB)
+```
+
+那么这个函数是否有提升的空间呢？先来检测一下他的性能。测试了这个函数的性能优化前的数据，具体结果如图所示：
 
 ```
 goos: linux
@@ -29,13 +37,7 @@ BenchmarkAddMulVVW/10000-8                 10000              122559 ns/op      
 BenchmarkAddMulVVW/100000-8                 1000             1254703 ns/op        5100.81 MB/s
 ```
 
-接下来我们来看一下这个函数的定义是如何执行的：
 
-```go
-func addMulVVW(z, x []Word, y Word) (c Word) {
-	return addMulVVW_g(z, x, y)
-}
-```
 
 可以看出，这个函数是调用了另一个函数：addMulVVW_g。我们进一步查看一下这个函数的定义以及调用的主要函数：
 
