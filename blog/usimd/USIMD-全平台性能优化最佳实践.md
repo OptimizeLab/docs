@@ -1,5 +1,7 @@
 # USIMD-全平台性能优化最佳实践
 
+[TOC]
+
 背景：众所周知，编译器会自动根据平台的并行指令集优化可并行化的代码块，但是这种优化限制非常大，大部分情况下不会产生最佳指令流水，无法最大化X86/ARM的CPU能力，所以目前主流的做法是手工编写汇编/Intrinsic产生最优的并行代码段，然而针对各个指令集架构分别编写一套代码可维护性和可拓展性都很差，随着这些代码越来越多，社区维护的成本越来越高，急需一套可推广的通用指令集优化技术方案，这就是今天要介绍的主题-USIMD优化。
 
 ## 缘起：USIMD诞生之初
@@ -383,3 +385,125 @@ get_sum_of_products_function(int nop, int type_num, npy_intp itemsize, npy_intp 
 - 跨平台能力增强：只需要熟悉USIMD的API，无需熟悉各平台的指令集差异；
 - 代码可维护性大大增强：USIMD的API都是经过专业的跨平台测试，这个基础设施的可靠性很高，而且都是最优的底层实现，程序员只需编写一套代码；
 - 抽象层次提高：可拓展性大大增强。
+
+## 原理：USIMD的实现机制
+
+USIMD框架可分为编译时、运行时和API三部分，首先是编译时：
+
+![../../_images/opt-infra.png](https://numpy.org/devdocs/_images/opt-infra.png)
+
+首先判断有没有打开`--disable-optimization`开关，如果打开了就走正常编译链接流程，否则就会从源码中扫描`*.dispatch.c`的文件，初始化底层API库，根据运行环境判断架构平台(X86/ARM/PowerPC)，如果发现`*.dispatch.c`已经分发了指定特性(缓存到build目录下的temp)，就把这些分发文件加入到源码编译树中，以便后面可以编译链接，若没有缓存(第一次编译或修改了特性baseline)，就解析--cpu-baseline和--cpu-dispatch里面的特性，结合编译器的支持程度，生成配置头(定义了需要分发的特性)，比如有如下baseline:
+
+```c
+/**
+ * @targets $maxopt baseline
+ * SSE2 (AVX2 FMA3) AVX512F
+ * NEON NEON_VFPV4
+ */
+```
+
+在同时支持AVX2和FMA3并且支持AVX512F的编译器编译之后会生成
+
+```c
+#define NPY__CPU_DISPATCH_CALL(CHK, CB, ...) \
+	NPY__CPU_DISPATCH_EXPAND_(CB((CHK(AVX512_SKX)), AVX512F, __VA_ARGS__)) \
+	NPY__CPU_DISPATCH_EXPAND_(CB((CHK(AVX)&&CHK(F16C)&&CHK(FMA3)&&CHK(AVX2)), AVX2, __VA_ARGS__))
+```
+
+这些代码的意思相当于：
+
+```C
+if (NPY_CPU_HAVE(AVX512F)) {
+   return XXX_avx512f(...);
+} else if (NPY_CPU_HAVE(AVX2) && NPY_CPU_HAVE(FMA3)) {
+   return XXX_avx2__fma3(...);
+} else {
+    // fallback to the baseline
+    return XXX(...);
+}
+```
+
+现在编译器把针对各个特性的patch包生成了，可是运行的时候在别的机器上运行，别的机器的CPU不一定支持AVX或者SSE啊，这个时候怎么办？接下来就需要运行时发挥作用了。
+
+![image-20200731111126479](./image-cpu-feature-detect.png)
+
+在运行时会通过下面这段代码检测机器是否支持某个特性：
+
+X86平台：
+
+```C
+#if defined(_MSC_VER) || defined (__INTEL_COMPILER)
+    return _xgetbv(0);
+#elif defined(__GNUC__) || defined(__clang__)
+    unsigned int eax, edx;
+    __asm(".byte 0x0F, 0x01, 0xd0" : "=a"(eax), "=d"(edx) : "c"(0));
+    return eax;
+#else
+    return 0;
+#endif
+```
+
+Power平台:
+
+```C
+unsigned int hwcap = getauxval(AT_HWCAP);
+if ((hwcap & PPC_FEATURE_HAS_VSX) == 0)
+     return;
+hwcap = getauxval(AT_HWCAP2);
+```
+
+ARM平台：
+
+```
+if (getauxval != 0) {
+        hwcap = getauxval(NPY__HWCAP);
+    #ifdef __arm__
+        hwcap2 = getauxval(NPY__HWCAP2);
+    #endif
+    } else {
+        unsigned long auxv[2];
+        int fd = open("/proc/self/auxv", O_RDONLY);
+        if (fd >= 0) {
+            while (read(fd, &auxv, sizeof(auxv)) == sizeof(auxv)) {
+                if (auxv[0] == NPY__HWCAP) {
+                    hwcap = auxv[1];
+                }
+            #ifdef __arm__
+                else if (auxv[0] == NPY__HWCAP2) {
+                    hwcap2 = auxv[1];
+                }
+            #endif
+                // detect the end
+                else if (auxv[0] == 0 && auxv[1] == 0) {
+                    break;
+                }
+            }
+            close(fd);
+        }
+    }
+    if (hwcap == 0 && hwcap2 == 0) {
+        /*
+         * try parsing with /proc/cpuinfo, if sandboxed
+         * failback to compiler definitions
+        */
+        if(!get_feature_from_proc_cpuinfo(&hwcap, &hwcap2)) {
+            return 0;
+        }
+    }
+```
+
+通过上述检测，CPU的特性就可以全部识别出来，如果某个特性是支持的，相关的宏就会打开，这样就实现了运行时分发包的目的。
+
+底层API可以分为如下几类：
+
+| 指令分类 | 示例             |
+| -------- | ---------------- |
+| 算术     | npyv_add_u8      |
+| 转换     | npyv_cvt_u8_b8   |
+| 内存     | npyv_load_f32    |
+| 重排序   | npyv_combinel_u8 |
+| 位运算   | npyv_shl_u16     |
+| 杂项     | npyv_zero_u8     |
+| 数据类型 | npyv_u8          |
+
+以X86平台的SSE作为基准API，其它平台如果没有相对应的指令，就使用模拟的方式实现。
