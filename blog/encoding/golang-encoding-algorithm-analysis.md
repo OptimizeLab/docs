@@ -114,6 +114,8 @@ base32、base64的应用于处理文本数据，表示、传输、存储一些�
 - 暂未识别出算法优化空间，ascii编码类算法不算复杂，目前的算法实现已经比较精简。
 - 社区issue有提到base64的性能问题，是可尝试的优化方向之一。
 
+
+
 ### 二进制/十六进制编码类
 
 golang支持二进制/十六进制编码算法，用于数字和字节序列之间的互相转换。
@@ -170,8 +172,153 @@ func (littleEndian) PutUint64(b []byte, v uint64) {
 - 流水线和算法优化空间小，通过循环展开等方式优化算法会增加代码的复杂性，接收可能性小。（代码注释中提到更追求简单而不是性能）
 - 社区issue数量少（<5个），可做的工作少。
 
-### XML/JSON 序列化
 
-### Gob 流式编码
 
-### 其他（asn1、CSV、pem）
+### pem\csv\asn1编解码包
+
+#### 技术原理
+
+pem：golang实现了pem数据编码算法，主要应用在TLS密钥和证书中。
+
+golang中一个pem数据结构包括Type 、headers、Bytes3个字段，分别表示pem证书的类型、头部、内容。
+
+```go
+type Block struct {
+	Type    string            // The type, taken from the preamble (i.e. "RSA PRIVATE KEY").
+	Headers map[string]string // Optional headers.
+	Bytes   []byte            // The decoded bytes of the contents. Typically a DER encoded ASN.1 structure.
+}
+```
+
+golang的pem包实现了pem证书与Block数据结构之间的互相转换，pem.Decode方法解析pem数据到Block块，核心代码分解如下：
+
+```go
+func Decode(data []byte) (p *Block, rest []byte) {
+	// pemStart begins with a newline. However, at the very beginning of
+	// the byte array, we'll accept the start string without it.
+    // 识别pem数据开始表示“-----BEGIN”
+	rest = data
+	if bytes.HasPrefix(data, pemStart[1:]) {
+		rest = rest[len(pemStart)-1 : len(data)]
+	} else if i := bytes.Index(data, pemStart); i >= 0 {
+		rest = rest[i+len(pemStart) : len(data)]
+	} else {
+		return nil, data
+	}
+
+    // 获取pem数据类型
+	typeLine, rest := getLine(rest)
+	if !bytes.HasSuffix(typeLine, pemEndOfLine) {
+		return decodeError(data, rest)
+	}
+	typeLine = typeLine[0 : len(typeLine)-len(pemEndOfLine)]
+
+	p = &Block{
+		Headers: make(map[string]string),
+		Type:    string(typeLine), // 插入pem数据类型
+	}
+    
+	// 获取数据数据的头部key-value
+	for {
+		// This loop terminates because getLine's second result is
+		// always smaller than its argument.
+		if len(rest) == 0 {
+			return nil, data
+		}
+		line, next := getLine(rest)
+
+		i := bytes.IndexByte(line, ':')
+		if i == -1 {
+			break
+		}
+
+		// TODO(agl): need to cope with values that spread across lines.
+		key, val := line[:i], line[i+1:]
+		key = bytes.TrimSpace(key)
+		val = bytes.TrimSpace(val)
+		p.Headers[string(key)] = string(val)
+		rest = next
+	}
+    
+    ......// 验证数据尾部"-----END"
+
+
+    //使用base64编码pem数据内容，存储到block.Bytes数组中
+	base64Data := removeSpacesAndTabs(rest[:endIndex])
+	p.Bytes = make([]byte, base64.StdEncoding.DecodedLen(len(base64Data)))
+	n, err := base64.StdEncoding.Decode(p.Bytes, base64Data)
+	if err != nil {
+		return decodeError(data, rest)
+	}
+	p.Bytes = p.Bytes[:n]
+
+	// the -1 is because we might have only matched pemEnd without the
+	// leading newline if the PEM block was empty.
+	_, rest = getLine(rest[endIndex+len(pemEnd)-1:])
+
+	return
+}
+```
+
+pem.Encode方法编码block数据块到pem数据，感兴趣可以自行查看源码 [encoding/pem/pem.go](https://github.com/golang/go/blob/master/src/encoding/pem/pem.go) 
+
+
+
+CSV：golang的encoding/csv包用于读写逗号分隔值（comma-separated value, [csv](https://en.wikipedia.org/wiki/Comma-separated_values)） 的数据，csv文件格式常应用于表格数据的交换 。
+
+cvs包实现了(r *Reader) Read、(r *Reader) ReadAll、(r *Reader) Write、(r *Reader) WriteAll 方法用于处理逗号分隔值数据的读写。
+
+样例程序如下：输入是逗号分隔值数据，使用csv.NewReader声明一个reader指针r，调用r.Read()读取每一行的数据输出到record 字符串数组中并打印。
+
+```go
+func ExampleReader() {
+	in := `first_name,last_name,username
+"Rob","Pike",rob
+Ken,Thompson,ken
+"Robert","Griesemer","gri"  // 输入的逗号分隔字符串
+`
+	r := csv.NewReader(strings.NewReader(in))
+
+	for {
+        record, err := r.Read() // 使用r.Read()方法读取读取数据输出到字符串数组中
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		fmt.Println(record)
+	}
+	// Output:
+	// [first_name last_name username]
+	// [Rob Pike rob]
+	// [Ken Thompson ken]
+	// [Robert Griesemer gri]
+}
+```
+
+csv包的读写方法调用底层bufio包的ReadSlice接口做数据读写，再对特殊符号做了处理，如逗号“，”，换行符 “\r\n”|"\n"，这里不展开分析，感兴趣可以自行查看源码 [encoding/csv](https://github.com/golang/go/tree/master/src/encoding/csv) 。
+
+ASN1：golang实现了[DES](https://en.wikipedia.org/wiki/Data_Encryption_Standard)编码的[ASN.1](https://zh.wikipedia.org/wiki/ASN.1)数据结构的解析。
+
+#### 优化空间分析
+
+- 无汇编、cache优化空间
+
+- 流水线和算法优化空间小 
+
+- pem算法无社区issue，csv和ASN.1算法的社区issue较多，可尝试从issue切入优化。
+
+  
+
+### xml/json/gob 编解码包
+
+xml：golang的XML包实现了XML 1.0解析器，可以理解XML名称空间。
+
+json：golang的JSON包实现了RFC 7159中定义的JSON编解码。
+
+gob：golang的gob包管理gobs二进制值在编码器和解码器之间的交换。典型使用场景是传递RPC中的参数和结果。
+
+xml/json/gob编解码器的技术原理不在此展开分析，将在下一篇编解码文章详细展开分析。
+
