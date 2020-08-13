@@ -20,10 +20,10 @@ wget https://dl.google.com/go/go1.14.2.linux-arm64.tar.gz
 
 ![image](images/image-install.png)
 
-4） 执行tar解压到/usr/loacl目录下（官方推荐)，得到go文件夹。
+4） 执行tar解压到/usr/local目录下（官方推荐)，得到go文件夹。
 
 ```linux
-tar -C /usr/loacl -zxvf go1.14.2.linux-arm64.tar.gz
+tar -C /usr/local -zxvf go1.14.2.linux-arm64.tar.gz
 ```
 
 得到go文件夹内容，结果如图所示：
