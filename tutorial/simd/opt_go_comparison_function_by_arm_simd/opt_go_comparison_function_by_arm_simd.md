@@ -24,10 +24,10 @@ git checkout before-simd
 git checkout -b after-simd 78ddf27
 # 切换到分支after-simd，此时目录下的代码文件已经变成了优化后的版本
 git checkout after-simd
-# 根据commitid查看变更
+# 根据提交记录78ddf27查看变更
 git show 78ddf27
 ```
-代码变更如图所示：
+代码变更的截取示意图如下：
 ![image](images/SIMD-git-show-id.png)
 为便于理解，下图展示了优化前的汇编函数EqualBytes与编写go代码的对应关系，此处对于一行go代码a[i]!=b[i]，需要四条汇编指令：1. 两条取数指令，分别将切片数组a和b中的byte值取到寄存器中；2. 通过比较指令CMP对比两个寄存器中的值，根据比较结果更新[状态寄存器](https://baike.baidu.com/item/%E7%8A%B6%E6%80%81%E5%AF%84%E5%AD%98%E5%99%A8/2477799?fr=aladdin); 3. 跳转指令BEQ根据状态寄存器值进行跳转，此处是等于则跳转到loop标签处，即如果相等则继续下一轮比较。
 ![image](images/image-code-compare.png)
