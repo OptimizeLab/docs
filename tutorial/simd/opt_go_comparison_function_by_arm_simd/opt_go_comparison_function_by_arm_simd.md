@@ -1,63 +1,37 @@
-# 基于ARM SIMD技术优化字节数组比较性能
+# 基于并行化技术优化通用字符串比较性能
 [SIMD即单指令多数据流(Single Instruction Multiple Data)](https://en.wikipedia.org/wiki/SIMD)，通过一条指令同时对多个数据进行运算，能够有效提高CPU的运算速度，主要适用于计算密集型、数据相关性小的多媒体、数学计算、人工智能等领域。  
-Golang是一个在云原生领域广泛使用的编程语言，被誉为云时代的C语言，Go在设计时充分考虑了简洁性和性能，他既包含强大的运行时，帮助用户进行协程调度、垃圾回收，也包括丰富的基础库如数学库、字节数组库、加解密库、图像库、编解码等等。对于性能要求较高且编译器目前还不能优化的场景，Go语言通过在底层使用汇编技术进行了优化，其中最重要的就是SIMD技术，下面将以一个字节数组比较的SIMD优化来详细介绍。
-### 1. 安装包和源码准备
-- 硬件配置：鲲鹏(ARM64)云Linux服务器[通用计算增强型KC1 kc1.2xlarge.2(8核|16GB)](https://www.huaweicloud.com/product/ecs.html)
-- [Golang发行版 1.9.2 和 1.12.1](https://golang.org/dl/)，此处开发环境准备请参考文章：[Golang 在ARM64开发环境配置](https://github.com/OptimizeLab/docs/blob/master/tutorial/environment/go_dev_env/go_dev_env.md)
-- [Golang github源码仓库](https://github.com/golang/go)下载，此处可以直接下载打包文件，但更好的方式是通过git工具管理
-- [Git使用简介](https://www.liaoxuefeng.com/wiki/896043488029600/896067008724000)：可以参考廖雪峰老师的网站  
-通过在bash命令行执行如下指令拉取golang的最新代码：
+[Go](https://golang.org/doc/)是一种快速、静态类型的开源语言，可以用来轻松构建简单、可靠、高效的软件。包含垃圾回收的便利性和运行时反射的功能。他的并发机制使go程序可以在多核和联网机器中获得最大收益。目前已经包括丰富的基础库如数学库、加解密库、图像库、编解码等等。对于性能要求较高且编译器目前还不能优化的场景，Go语言通过在底层使用汇编技术进行了优化，其中最重要的就是SIMD技术。本文以Go语言开源社区在ARM硬件平台的优化实践为例，介绍应用ARM SIMD技术的方法。
+### 1. 环境准备
+- 硬件配置：鲲鹏(ARM64)云Linux服务器-[通用计算增强型KC1 kc1.2xlarge.2(8核|16GB)](https://www.huaweicloud.com/product/ecs.html)
+- [Golang发行版 >= 1.12.1](https://golang.org/dl/)，此处开发环境准备请参考文章：[Golang 在ARM64开发环境配置](https://github.com/OptimizeLab/docs/blob/master/tutorial/environment/go_dev_env/go_dev_env.md)
+- [Golang github源码仓库](https://github.com/golang/go)下载，此处通过[Git](https://git-scm.com/book/zh/v2)进行版本控制
+- 通过在bash命令行执行如下指令，拉取github代码托管平台上golang的代码仓：
 ```bash
 $ git clone https://github.com/golang/go
 ```
-### 2. byte数组比较的性能问题
-在代码编写中经常会碰到比较两个字符串是否相等的情况，在Golang语言中可以将两个string转为字节数组[]byte的形式进行比较，其中每个byte是一个字节(8bit)，如下是一个简单直观的比较函数实现思路:
-```go
-func EqualByteArrAB(a, b []byte) bool {
-    //---------------数组长度比较-------------------
-    if len(a) != len(b) {          
-        return false               
-    }                              
-    //--------按顺序比较数组a和数组b中的每个byte------
-    for i, _ := range a {
-        if a[i] != b[i] {
-            return false
-        }
-    }
-    return true
-}
-```
-实现算法后，需要进行充分的测试才能投入生产环境，通过[benchmark工具](https://golang.org/pkg/testing/)进行测试后获得如下性能数据：
+### 2. 社区的ARM SIMD优化方案
+那么如何获取Go语言的SIMD指令优化方案呢？包含两种查看优化记录的方法：  
+1、在网页查看优化提交记录[ChangeList](http://svnbook.red-bean.com/en/1.8/svn.advanced.changelists.html)：[bytes: add optimized Equal for arm64](https://go-review.googlesource.com/c/go/+/71110)。  
+2、在本地源码仓查看，进入刚下载的go源码目录下，此时处于master分支上，展示的是最新的代码，本文已经找到了优化前后的两个提交记录，并通过这两个记录创建分支，再通过分支切换，展示优化前后的代码：
 ```bash
-goos: linux
-goarch: arm64
-pkg: test_obj/testbyteequal
-BenchmarkEqual/0-8             330669548                3.64 ns/op
-BenchmarkEqual/1-8             227632882                5.27 ns/op           189.74 MB/s
-BenchmarkEqual/6-8             132229749                9.09 ns/op           660.35 MB/s
-BenchmarkEqual/9-8             100000000                10.1 ns/op           893.80 MB/s
-BenchmarkEqual/15-8             83173801                14.4 ns/op          1041.32 MB/s
-BenchmarkEqual/16-8             79955283                15.0 ns/op          1069.79 MB/s
-BenchmarkEqual/20-8             67353938                17.8 ns/op          1124.26 MB/s
-BenchmarkEqual/32-8             45706566                26.2 ns/op          1219.49 MB/s
-BenchmarkEqual/4K-8               421956                2844 ns/op          1440.18 MB/s
-BenchmarkEqual/4M-8                  334             3496666 ns/op          1199.52 MB/s
-BenchmarkEqual/64M-8                  18            66481026 ns/op          1009.44 MB/s
+# 根据优化前的一个提交记录0c68b79创建一个新的分支before-simd，这个分支包含优化前的版本
+git checkout -b before-simd 0c68b79
+# 切换到分支before-simd，此时目录下的代码文件已经变成了优化前的版本
+git checkout before-simd
+# 根据优化后提交记录78ddf27创建一个新的分支after-simd，这个分支包含优化后的版本
+git checkout -b after-simd 78ddf27
+# 切换到分支after-simd，此时目录下的代码文件已经变成了优化后的版本
+git checkout after-simd
 ```
-通过观察数据可以直观的发现，随着数据增长，算法的性能变得非常差，当字节数组长度>4K时，已经影响到了正常的使用。  
-
-对代码进行简单分析，可以发现最主要的操作是循环执行比较语句a[i] != b[i]，这里最主要的开销是byte数据加载和比较操作，随着测试的byte数组长度增长，执行的数据加载和比较操作越来越多，开销也就越来越大。如果能够减少数据加载和比较的次数就可以优化性能，利用ARM硬件架构的SIMD加速特性是解决该问题的有效办法：
-### 3. SIMD优化方案
-那么Go语言是怎么处理这个问题的呢？在深入分析本文所使用的Golang发行版1.9.2官方源码后，在src/runtime/asm_arm64.s文件中发现了上节比较函数的Golang汇编版本EqualBytes，算法逻辑完全一致，如图所示：
+为便于理解，下图展示了优化前的汇编函数EqualBytes与编写go代码的对应关系，此处对于一行go代码a[i]!=b[i]，需要四条汇编指令：1. 两条取数指令，分别将切片数组a和b中的byte值取到寄存器中；2. 通过比较指令CMP对比两个寄存器中的值，根据比较结果更新[状态寄存器](https://baike.baidu.com/item/%E7%8A%B6%E6%80%81%E5%AF%84%E5%AD%98%E5%99%A8/2477799?fr=aladdin); 3. 跳转指令BEQ根据状态寄存器值进行跳转，此处是等于则跳转到loop标签处，即如果相等则继续下一轮比较。
 ![image](images/image-code-compare.png)
-经过对比验证发现在常用的社区发行版(如1.12.1)中已经对EqualBytes函数做了优化，解决了本文场景下的性能问题，具体的优化提交记录见[ChangeList](http://svnbook.red-bean.com/en/1.8/svn.advanced.changelists.html)
-：[bytes: add optimized Equal for arm64](https://go-review.googlesource.com/c/go/+/71110)，该优化方法使用了SIMD技术，即单指令同时处理多个byte数据，大幅减少了数据加载和比较操作的指令条数，提升了性能
-### 4. SIMD优化前后对比  
-如下是使用SIMD技术优化前后的对比图，优化前后的代码都是使用Golang汇编编写，从图中可以看到优化前代码非常简单，循环取1 byte进行比较，使用SIMD指令优化后，代码变得非常复杂，这里可以先避免陷入细节，先理解实现原理，具体代码细节可以在章节6再进一步学习。此处代码变复杂的主要原因是进行了分情况的分块处理，首先循环处理64 bytes大小的分块，当数组末尾不足64 bytes时，再将余下的按16 bytes分块处理，直到余下长度为1时的情况，下图直观的演示了优化前后的对比关系和优化后分块处理的规则:
+
+优化方法使用了SIMD技术，即单指令同时处理多个byte数据，大幅减少了数据加载和比较操作的指令条数，提升了性能   
+下图是使用SIMD技术优化汇编代码前后的对比图，从图中可以看到优化前代码非常简单，循环取1 byte进行比较，使用SIMD指令优化后，代码被复杂化，这里可以先避免陷入细节，先理解实现原理，具体代码细节可以在章节[优化后代码详解]再进一步学习。此处代码变复杂的主要原因是进行了分情况的分块处理，首先循环处理64 bytes大小的分块，当数组末尾不足64 bytes时，再将余下的按16 bytes分块处理，直到余下长度为1时的情况，下图直观的演示了优化前后的对比关系和优化后分块处理的规则:
 ![image](images/simd-compare.png)  
     
-### 5. 优化前代码详解
-优化前的代码实现在src/runtime/asm_arm64.s中，该函数是循环从两个数组中取1 byte进行比较，每byte数据要耗费两个加载操作、1个byte比较操作、1个数组末尾判断操作，如下所示：
+### 3. 优化前代码详解
+优化前的代码循环从两个数组中取1 byte进行比较，每byte数据要耗费2个加载操作、1个比较操作、1个数组末尾判断操作，如下所示：
 ```assembly
 //func Equal(a, b []byte) bool
 TEXT bytes·Equal(SB),NOSPLIT,$0-49
@@ -94,8 +68,8 @@ equal:
 //----------------------------- 
 ```
 
-### 6. 优化后代码详解
-优化后的代码实现在src/runtime/asm_arm64.s中。这里的代码实现因为做了循环展开，所有看起来比较复杂，但逻辑是很清晰的，即采用分块的思路，将数组划分为64/16/8/4/2/1bytes大小的块，最大程度发挥SIMD指令的优势，使用多个向量寄存器，每次循环中尽可能处理更多的数据。汇编代码解读如下(代码中添加了关键指令注释）：
+### 4. 优化后代码详解
+优化后的代码因为做了循环展开，所有看起来比较复杂，但逻辑是很清晰的，即采用分块的思路，将数组划分为64/16/8/4/2/1bytes大小的块，最大程度发挥SIMD指令的优势，使用多个向量寄存器，每次循环中尽可能处理更多的数据。汇编代码解读如下(代码中添加了关键指令注释）：
 ```assembly
 // 函数的参数，此处是通过寄存器传递参数的
 // 调用memeqbody的父函数已经将参数放入了如下寄存器中
@@ -200,7 +174,7 @@ not_equal:
 ```
 上述优化代码中，使用VLD1(数据加载指令)一次加载64byte数据到SIMD寄存器，再使用VCMEQ指令比较SIMD寄存器保存的数据内容得到结果，相比传统用的单字节比较方式，大大提高了大于64byte数据块的比较性能。大于16byte小于64byte块数据，使用一个SIMD寄存器一次处理16byte块的数据，小于16byte数据块使用通用寄存器保存数据，一次比较8\4\2\1byte的数据块。
 
-### 7. 结果验证
-使用[benchstat工具](https://godoc.org/golang.org/x/perf/cmd/benchstat)进行性能对比，整理到表格后如下所示： 
+### 5. 结果验证
+go语言可通过[benchmark工具](https://golang.org/pkg/testing/)进行单个函数的性能测试。获得结果后通过使用[benchstat工具](https://godoc.org/golang.org/x/perf/cmd/benchstat)进行优化前后的性能对比。具体使用方法请参考文章[Golang 在ARM64开发环境配置]( https://github.com/OptimizeLab/docs/blob/master/tutorial/environment/go_dev_env/go_dev_env.md)。结果如下表格(ns/op：每次函数执行耗费的纳秒时间，MB/s：每秒处理的兆字节数据)： 
 ![image](images/SIMDEqualResult.png)  
 上表中可以清晰的看到使用SIMD优化后，所有的用例性能都有所提升，其中数据大小为4K时性能提升率最高，耗时减少了93.48%；每秒数据处理量提升14.29倍
