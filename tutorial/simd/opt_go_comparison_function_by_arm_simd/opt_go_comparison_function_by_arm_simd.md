@@ -1,18 +1,20 @@
 # 基于并行化技术优化通用字符串比较性能
 [SIMD即单指令多数据流(Single Instruction Multiple Data)](https://en.wikipedia.org/wiki/SIMD)，通过一条指令同时对多个数据进行运算，能够有效提高CPU的运算速度，主要适用于计算密集型、数据相关性小的多媒体、数学计算、人工智能等领域。  
-[Go](https://golang.org/doc/)是一种快速、静态类型的开源语言，可以用来轻松构建简单、可靠、高效的软件。包含垃圾回收的便利性和运行时反射的功能。他的并发机制使go程序可以在多核和联网机器中获得最大收益。目前已经包括丰富的基础库如数学库、加解密库、图像库、编解码等等。对于性能要求较高且编译器目前还不能优化的场景，Go语言通过在底层使用汇编技术进行了优化，其中最重要的就是SIMD技术。本文以Go语言开源社区在ARM硬件平台的优化实践为例，介绍应用ARM SIMD技术的方法。
+[Go](https://golang.org/doc/)是一种快速、静态类型的开源语言，可以用来轻松构建简单、可靠、高效的软件。包含垃圾回收的便利性和运行时反射的功能。他的并发机制使go程序可以在多核和联网机器中获得最大收益。目前已经包括丰富的基础库如数学库、加解密库、图像库、编解码等等。对于性能要求较高且编译器目前还不能优化的场景，Go语言通过在底层使用汇编技术进行了优化，其中最重要的就是SIMD技术。  
+本文通过Go语言开源社区在ARM硬件平台的优化案例，介绍应用ARM SIMD技术的方法。
 ### 1. 环境准备
 - 硬件配置：鲲鹏(ARM64)云Linux服务器-[通用计算增强型KC1 kc1.2xlarge.2(8核|16GB)](https://www.huaweicloud.com/product/ecs.html)
 - [Golang发行版 >= 1.12.1](https://golang.org/dl/)，此处开发环境准备请参考文章：[Golang 在ARM64开发环境配置](https://github.com/OptimizeLab/docs/blob/master/tutorial/environment/go_dev_env/go_dev_env.md)
-- [Golang github源码仓库](https://github.com/golang/go)下载，此处通过[Git](https://git-scm.com/book/zh/v2)进行版本控制
+- [Golang github源码仓库](https://github.com/golang/go)下载，此处通过[Git安装和使用](https://git-scm.com/book/zh/v2)进行版本控制
 - 通过在bash命令行执行如下指令，拉取github代码托管平台上golang的代码仓：
 ```bash
 $ git clone https://github.com/golang/go
 ```
 ### 2. 社区的ARM SIMD优化方案
 那么如何获取Go语言的SIMD指令优化方案呢？包含两种查看优化记录的方法：  
-1、在网页查看优化提交记录[ChangeList](http://svnbook.red-bean.com/en/1.8/svn.advanced.changelists.html)：[bytes: add optimized Equal for arm64](https://go-review.googlesource.com/c/go/+/71110)。  
-2、在本地源码仓查看，进入刚下载的go源码目录下，此时处于master分支上，展示的是最新的代码，本文已经找到了优化前后的两个提交记录，并通过这两个记录创建分支，再通过分支切换，展示优化前后的代码：
+1、在网页查看优化提交记录[ChangeList](http://svnbook.red-bean.com/en/1.8/svn.advanced.changelists.html)：
+![image](images/SIMDEqualCommitID.png)  
+2、在本地源码仓查看和比较性能，进入刚下载的go源码目录下，此时处于master分支上，展示的是最新的代码，本文已经找到了优化前后的两个提交记录，并通过这两个记录创建分支，再通过分支切换，展示优化前后的代码：
 ```bash
 # 根据优化前的一个提交记录0c68b79创建一个新的分支before-simd，这个分支包含优化前的版本
 git checkout -b before-simd 0c68b79
@@ -22,7 +24,11 @@ git checkout before-simd
 git checkout -b after-simd 78ddf27
 # 切换到分支after-simd，此时目录下的代码文件已经变成了优化后的版本
 git checkout after-simd
+# 根据commitid查看变更
+git show 78ddf27
 ```
+代码变更如图所示：
+![image](images/SIMD-git-show-id.png)
 为便于理解，下图展示了优化前的汇编函数EqualBytes与编写go代码的对应关系，此处对于一行go代码a[i]!=b[i]，需要四条汇编指令：1. 两条取数指令，分别将切片数组a和b中的byte值取到寄存器中；2. 通过比较指令CMP对比两个寄存器中的值，根据比较结果更新[状态寄存器](https://baike.baidu.com/item/%E7%8A%B6%E6%80%81%E5%AF%84%E5%AD%98%E5%99%A8/2477799?fr=aladdin); 3. 跳转指令BEQ根据状态寄存器值进行跳转，此处是等于则跳转到loop标签处，即如果相等则继续下一轮比较。
 ![image](images/image-code-compare.png)
 
@@ -80,13 +86,13 @@ equal:
 TEXT runtime·memeqbody<>(SB),NOSPLIT,$0
 //---------------数组长度判断-----------------
 // 根据数组长度判断按照何种分块开始处理
-    CMP    $1, R1                        // 数组长度为1，跳转到标签one下面的代码
+    CMP    $1, R1                        
     BEQ    one
-    CMP    $16, R1                       // 处理数组长度小于16的情况
+    CMP    $16, R1                       
     BLO    tail
-    BIC    $0x3f, R1, R3                 // 位清除指令，清除R1的后6位存放到R3
-    CBZ    R3, chunk16                   // 跳转指令，R3为0，跳转到chunk16
-    ADD    R3, R0, R6                    // R6为64byte块尾部指针
+    BIC    $0x3f, R1, R3                 
+    CBZ    R3, chunk16                   
+    ADD    R3, R0, R6                    
 
 //------------处理长度为64 bytes的块-----------
 // 按64 bytes为块循环处理
@@ -114,49 +120,47 @@ chunk64_loop:
     AND    $0x3f, R1, R1                 // 仅保存R1末尾的后6位，这里保存的是末尾不足64bytes块的大小
     CBZ    R1, equal                     // R1为0,跳转equal，否则向下顺序执行
 
-//-----------处理剩余长度小于16的块------------
-chunk16:                               
-    BIC    $0xf, R1, R3                  // 位清除指令，清除R1的后4位存到R3
-    CBZ    R3, tail                      // R3为0，表示末尾剩余的块小于16byte，跳转到tail块
-    ADD    R3, R0, R6                    // R6为16byte块尾部指针
+...............................................
+...............................................
+                  
 //-----------循环处理长度为16 bytes的块------------
-chunk16_loop:                            // 循环处理16byte，处理过程类似chunk64_loop
+chunk16_loop:                            
     VLD1.P (R0), [V0.D2] 
     VLD1.P (R2), [V1.D2]
     VCMEQ    V0.D2, V1.D2, V2.D2
     CMP R0, R6
     VMOV V2.D[0], R4
     VMOV V2.D[1], R5
-    CBZ R4, not_equal                  // 判断是否有不等，如有0位，跳not-equal
+    CBZ R4, not_equal                  
     CBZ R5, not_equal
-    BNE chunk16_loop                   // 末尾还有至少一个16bytes的大小，循环继续
+    BNE chunk16_loop                   
     AND $0xf, R1, R1
-    CBZ R1, equal                      // 若无剩余块（小于16byte），则跳转equal，否则向下顺序执行
+    CBZ R1, equal                     
 //---------处理在末尾长度小于16 bytes的块---------
 tail:                                  
-    TBZ $3, R1, lt_8                   // 跳转指令，若R1[3]==0，也就是R1小于8，跳转到lt_8
+    TBZ $3, R1, lt_8                   
     MOVD.P 8(R0), R4
     MOVD.P 8(R2), R5
     CMP R4, R5    
     BNE not_equal 
-//---------处理在末尾长度小于8 bytes的块---------
+
 lt_8:                                  
     TBZ $2, R1, lt_4
     MOVWU.P 4(R0), R4
     MOVWU.P 4(R2), R5
     CMP R4, R5
     BNE not_equal
-//---------处理在末尾长度小于4 bytes的块---------
+
 lt_4:                                 
     TBZ $1, R1, lt_2
     MOVHU.P 2(R0), R4
     MOVHU.P 2(R2), R5
     CMP R4, R5
     BNE not_equal
-//---------处理在末尾长度小于2 bytes的块---------
+
 lt_2:                                 
     TBZ     $0, R1, equal
-//-----------处理在末尾长度为1 byte的块----------
+
 one:                                  
     MOVBU (R0), R4
     MOVBU (R2), R5
@@ -174,7 +178,20 @@ not_equal:
 ```
 上述优化代码中，使用VLD1(数据加载指令)一次加载64byte数据到SIMD寄存器，再使用VCMEQ指令比较SIMD寄存器保存的数据内容得到结果，相比传统用的单字节比较方式，大大提高了大于64byte数据块的比较性能。大于16byte小于64byte块数据，使用一个SIMD寄存器一次处理16byte块的数据，小于16byte数据块使用通用寄存器保存数据，一次比较8\4\2\1byte的数据块。
 
-### 5. 结果验证
-go语言可通过[benchmark工具](https://golang.org/pkg/testing/)进行单个函数的性能测试。获得结果后通过使用[benchstat工具](https://godoc.org/golang.org/x/perf/cmd/benchstat)进行优化前后的性能对比。具体使用方法请参考文章[Golang 在ARM64开发环境配置]( https://github.com/OptimizeLab/docs/blob/master/tutorial/environment/go_dev_env/go_dev_env.md)。结果如下表格(ns/op：每次函数执行耗费的纳秒时间，MB/s：每秒处理的兆字节数据)： 
+### 5. 优化结果
+go语言可通过[Go benchmark](https://golang.org/pkg/testing/)进行单个函数的性能测试。获得结果后通过使用[benchstat工具](https://godoc.org/golang.org/x/perf/cmd/benchstat)进行优化前后的性能对比。具体使用方法请参考文章[Golang 在ARM64开发环境配置]( https://github.com/OptimizeLab/docs/blob/master/tutorial/environment/go_dev_env/go_dev_env.md)。结果如下表格： 
 ![image](images/SIMDEqualResult.png)  
-上表中可以清晰的看到使用SIMD优化后，所有的用例性能都有所提升，其中数据大小为4K时性能提升率最高，耗时减少了93.48%；每秒数据处理量提升14.29倍
+上表中可以清晰的看到使用SIMD优化后，所有的用例性能都有所提升，其中数据大小为4K时性能提升率最高，耗时减少了93.49%；每秒数据处理量提升14.29倍  
+用例名/(字节数组大小-核心数)|优化前每操作耗时 time/op|优化后每操作耗时 time/op|耗时对比|优化前单位时间处理数据量|优化后单位时间处理数据量|处理数据量对比
+---|---|---|---|---|---|---|
+Equal/1-8   |   5.43ns ± 0%   |   5.41ns ± 0%   | -0.26%  (p=0.048 n=5+5)  | 184MB/s ± 0%  | 185MB/s ± 0%   |   ~     (p=0.056 n=5+5)
+Equal/6-8   |   10.0ns ± 0%   |    6.2ns ± 0%   | -38.30%  (p=0.008 n=5+5) | 598MB/s ± 0%  | 972MB/s ± 0%   | +62.56%  (p=0.008 n=5+5)
+Equal/9-8   |   12.3ns ± 0%   |    6.6ns ± 0%   | -46.67%  (p=0.029 n=4+4) | 729MB/s ± 0%  | 1373MB/s ± 0%  | +88.35%  (p=0.008 n=5+5)
+Equal/15-8  |   17.0ns ± 0%   |    7.4ns ± 2%   | -56.20%  (p=0.008 n=5+5) | 881MB/s ± 0%  | 2015MB/s ± 2%  | +128.78%  (p=0.008 n=5+5)
+Equal/16-8  |   17.8ns ± 0%   |    5.8ns ± 0%   | -67.36%  (p=0.008 n=5+5) | 901MB/s ± 0%  | 2755MB/s ± 0%  | +205.94%  (p=0.016 n=4+5)
+Equal/20-8  |   20.9ns ± 0%   |    8.0ns ± 0%   | -61.75%  (p=0.000 n=5+4) | 956MB/s ± 0%  | 2502MB/s ± 0%  | +161.84%  (p=0.016 n=5+4)
+Equal/32-8  |   30.4ns ± 0%   |    7.6ns ± 0%   | -74.85%  (p=0.008 n=5+5) | 1.05GB/s ± 0% | 4.19GB/s ± 0%  | +297.49%  (p=0.008 n=5+5)
+Equal/4K-8  |   3.18µs ± 0%   |   0.21µs ± 0%   | -93.49%  (p=0.000 n=5+4) | 1.29GB/s ± 0% | 19.70GB/s ± 0% | +1428.63%  (p=0.008 n=5+5)
+Equal/4M-8  |   3.69ms ± 1%   |   0.65ms ± 4%   | -82.36%  (p=0.008 n=5+5) | 1.14GB/s ± 1% | 6.45GB/s ± 4%  | +466.96%  (p=0.008 n=5+5)
+Equal/64M-8 |   63.3ms ± 0%   |   17.4ms ± 5%   | -72.54%  (p=0.008 n=5+5) | 1.06GB/s ± 0% | 3.86GB/s ± 5%  | +264.45%  (p=0.008 n=5+5)
+[注]：ns/op:每次函数执行耗费的纳秒时间，ms/op:每次函数执行耗费的毫秒时间，MB/s：每秒处理的兆字节数据，GB/s：每秒处理的G字节数据
