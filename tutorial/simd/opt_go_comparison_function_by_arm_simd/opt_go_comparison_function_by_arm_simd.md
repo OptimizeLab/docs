@@ -198,42 +198,47 @@ not_equal:
 ```
 上述优化代码中，使用VLD1(数据加载指令)一次加载64bytes数据到SIMD寄存器，再使用VCMEQ指令比较SIMD寄存器保存的数据内容得到结果，相比传统用的单字节比较方式，提高了64byte数据块的比较性能。大于16byte小于64byte块数据，使用一个SIMD寄存器一次处理16byte块的数据，小于16byte数据块使用通用寄存器保存数据，一次比较8\4\2\1byte的数据块。
 
-### 5. 实验
+### 5. 动手实验
 感兴趣的读者可以根据下面的命令自己执行一遍，感受SIMD技术的强大。
 - 环境准备
 1. 硬件配置：鲲鹏(ARM64)云Linux服务器-[通用计算增强型KC1 kc1.2xlarge.2(8核|16GB)](https://www.huaweicloud.com/product/ecs.html)
 2. [Golang发行版 >= 1.12.1](https://golang.org/dl/)，此处开发环境准备请参考文章：[Golang 在ARM64开发环境配置](https://github.com/OptimizeLab/docs/blob/master/tutorial/environment/go_dev_env/go_dev_env.md)
 3. [Golang github源码仓库](https://github.com/golang/go)下载，此处通过[Git安装和使用](https://git-scm.com/book/zh/v2)进行版本控制。
-- 动手实验
-1. 在鲲鹏服务器上，通过bash命令行拉取github代码托管平台上golang的代码仓：
+- 操作步骤
+如下操作包含在鲲鹏服务器上进行编译测试的全过程，本文已经找到了优化前后的两个提交记录，优化前的commit id:0c68b79和优化后的commit id:78ddf27，可以按如下步骤进行操作：
 ```bash
-$ git clone https://github.com/golang/go
-```
-2、进入刚下载的go源码目录下，此时源码仓处于master分支上，展示的是最新的代码，本文已经找到了优化前后的两个提交记录，优化前的commit id:0c68b79和优化后的commit id:78ddf27。
-```bash
+# 找到一个放置go源码仓的目录，如/usr/local/src/exp
+mkdir /usr/local/src/exp
+cd /usr/local/src/exp
+# 通过git工具拉取github代码托管平台上golang的代码仓
+git clone https://github.com/golang/go
+# 进入源码目录
+cd /usr/local/src/exp/go/src
 # 根据优化前的提交记录0c68b79创建一个新的分支before-simd，这个分支包含优化前的版本
 git checkout -b before-simd 0c68b79
 # 切换到分支before-simd，此时目录下的代码文件已经变成了优化前的版本
 git checkout before-simd
+# 编译go源码，生成go开发环境
+bash make.bash
+# 把当前目录设置为GOROOT目录
+export GOROOT=/usr/local/src/exp/go
+# 使用go benchmark命令测试性能并记录在文件before-simd-bench.txt中
+go test bytes -v -bench ^BenchmarkEqual$ -count=5 -run  ^$ > before-simd-bench.txt
 # 根据优化后的提交记录78ddf27创建一个新的分支after-simd，这个分支包含优化后的版本
 git checkout -b after-simd 78ddf27
 # 切换到分支after-simd，此时目录下的代码文件已经变成了优化后的版本
 git checkout after-simd
-# 根据提交记录78ddf27查看变更
-git show 78ddf27
-# 分别在两个版本编译go源码，生成go开发环境，在src目录下执行
+# 再次编译go源码，生成go开发环境
 bash make.bash
-# 编译后将GOROOT环境变量设置到刚编译完的go源码目录下
-# 执行benchmark命令，分别收集优化前后的数据
-# 优化前编译的版本
-go test bytes -v -bench ^BenchmarkEqual$ -count=5 -run  ^$ > before-simd-bench.txt
-# 优化后编译的版本
+# 使用go benchmark命令测试性能并记录在文件after-simd-bench.txt中
 go test bytes -v -bench ^BenchmarkEqual$ -count=5 -run  ^$ > after-simd-bench.txt
 # benchstat 对比结果
 benchstat before-simd-bench.txt after-simd-bench.txt
+# 最后，可以根据提交记录78ddf27查看代码变更
+git show 78ddf27
 ```
 ### 6. 优化结果
-使用[Go benchmark](https://golang.org/pkg/testing/)记录优化前后的数据。获得结果后通过使用[Go benchstat](https://godoc.org/golang.org/x/perf/cmd/benchstat)进行优化前后的性能对比。具体使用方法请参考文章[Golang 在ARM64开发环境配置]( https://github.com/OptimizeLab/docs/blob/master/tutorial/environment/go_dev_env/go_dev_env.md)。结果如下表格： 
+如章节[动手实验]所述使用[Go benchmark](https://golang.org/pkg/testing/)记录优化前后的数据。获得结果后通过使用[Go benchstat](https://godoc.org/golang.org/x/perf/cmd/benchstat)进行优化前后的性能对比。结果如下表格： 
 用例名/(字节数组大小-核心数)|优化前每操作耗时 time/op|优化后每操作耗时 time/op|耗时对比|优化前单位时间处理数据量|优化后单位时间处理数据量|处理数据量对比
 ---|---|---|---|---|---|---|
 Equal/1-8   |   5.43ns ± 0%   |   5.41ns ± 0%   |  -0.26%  (p=0.048 n=5+5) | 184MB/s ± 0%  | 185MB/s ± 0%   |   ~     (p=0.056 n=5+5)
@@ -248,4 +253,4 @@ Equal/4M-8  |   3.69ms ± 1%   |   0.65ms ± 4%   | -82.36%  (p=0.008 n=5+5) | 1
 Equal/64M-8 |   63.3ms ± 0%   |   17.4ms ± 5%   | -72.54%  (p=0.008 n=5+5) | 1.06GB/s ± 0% | 3.86GB/s ± 5%  | +264.45%  (p=0.008 n=5+5)
 
 [注]ns/op:每次函数执行耗费的纳秒时间;ms/op:每次函数执行耗费的毫秒时间;MB/s:每秒处理的兆字节数据;GB/s:每秒处理的G字节数据;
-上表中可以清晰的看到使用SIMD优化后，所有的用例性能都有所提升，其中数据大小为4K时性能提升率最高，耗时减少了93.49%；每秒数据处理量提升14.29倍，对于4M的数据
+上表中可以清晰的看到使用SIMD优化后，所有的用例性能都有所提升，其中数据大小为4K时性能提升率最高，耗时减少了93.49%；每秒数据处理量提升14.29倍
