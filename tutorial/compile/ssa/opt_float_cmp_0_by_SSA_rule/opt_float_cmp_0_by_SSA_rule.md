@@ -1,14 +1,11 @@
-# 浮点数与0比较的SSA规则优化
-### 安装包和源码准备
-- [Golang发行版 1.12.1 ARM64版](https://golang.org/dl/)安装
-- [Golang源码仓库](https://go.googlesource.com/go)下载
-```bash
-$ git clone https://go.googlesource.com/go
-$ cd go/src
-```
-- 硬件配置：鲲鹏(ARM64)服务器
-### 1. 浮点数与0比较性能问题
-在代码开发中，经常会出现将变量与0比较的场景，比如为用户返回剩余金额大于0的列表，因此可能会用到如下函数：
+# 优化编译规则提升变量比较性能的实践
+[编译器](https://baike.baidu.com/item/%E7%BC%96%E8%AF%91%E5%99%A8/8853067?fr=aladdin)的作用是将高级语言的源代码翻译为低级语言的目标代码。通常为了便于优化处理，编译器会将源代码转换为中间表示形式([Intermediate representation](http://wanweibaike.com/wiki-%E4%B8%AD%E9%96%93%E8%AA%9E%E8%A8%80))，很多优化都是作用在这个形式上，如下面将介绍的编译规则优化。  
+在使用go编程时通常使用[go语言原生编译器](https://github.com/golang/go/blob/master/src/cmd/compile/README.md)，它包括[语法分析](https://baike.baidu.com/item/%E8%AF%AD%E6%B3%95%E5%88%86%E6%9E%90)、[AST变换](https://baike.baidu.com/item/%E6%8A%BD%E8%B1%A1%E8%AF%AD%E6%B3%95%E6%A0%91/6129952?fr=aladdin)、[静态单赋值SSA PASS](https://github.com/golang/go/tree/master/src/cmd/compile/internal/ssa)、机器码生成等多个编译过程。  
+其中在生成SSA中间表示形式后进行了多个编译优化过程[Compiler passes](https://github.com/golang/go/tree/master/src/cmd/compile/internal/ssa#compiler-passes)，每个pass都会对SSA形式的函数做转换，如[deadcode elimination](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/deadcode.go)会检测并删除不会被执行的代码和无用的变量。在所有pass中[lower](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/lower.go)会根据编写好的优化规则将SSA中间表示从与体系结构(如[X86](https://baike.baidu.com/item/Intel%20x86?fromtitle=x86&fromid=6150538)、[ARM](https://baike.baidu.com/item/ARM%E6%9E%B6%E6%9E%84/9154278)等)无关的转换为体系结构相关的，转换后的形式在对应的体系结构上才是真正有效的。  
+本文以go原生编译器中ARM64架构下浮点值变量与0比较的编译规则优化为例，讲解如何编写一个优化规则来帮助编译器生成更高质量的代码，进而提升程序的运行速度。
+
+### 1. 浮点变量与0比较问题
+[浮点数](https://baike.baidu.com/item/%E6%B5%AE%E7%82%B9%E6%95%B0/6162520)在应用开发中有广泛的应用，如用来表示一个带小数的金额或积分，经常会出现浮点数与0比较的情况，如向数据库录入一个商品时，为防止商品信息错误，可以检测录入的金额是否大于0，当用户购买产品时，可能需要先做一个验证，检测账户上是否有大于0的金额，如果满足再去查询商品信息、录入订单等，这样可以在交易的开始阶段排除一些无效或恶意的请求。比如做一个活动，用浮点数表示积分，向用户展示一个积分榜单，但是需要屏蔽掉积分小于等于0的条目，可能会用到如下函数：
 ```go
 func comp(x float64, arr []int) {
     for i := 0; i < len(arr); i++ {
@@ -19,136 +16,106 @@ func comp(x float64, arr []int) {
 }
 ```
 
-
-使用如下compile命令查看该函数的汇编代码：
+使用如下compile命令查看该函数的汇编代码(为便于理解，省略了部分无用代码)：
 ```bash
 go tool compile -S main.go
 ```
 ```assembly
 "".comp STEXT size=80 args=0x20 locals=0x0 leaf
         0x0000 00000 (main.go:3)        TEXT    "".comp(SB), LEAF|NOFRAME|ABIInternal, $0-32
-        0x0000 00000 (main.go:3)        FUNCDATA        ZR, gclocals·09cf9819fc716118c209c2d2155a3632(SB)
-        0x0000 00000 (main.go:3)        FUNCDATA        $1, gclocals·69c1753bd5f81501d95132d08af04464(SB)
-        0x0000 00000 (main.go:3)        FUNCDATA        $3, gclocals·568470801006e5c0dc3947ea998fe279(SB)
-        0x0000 00000 (main.go:4)        PCDATA  $2, ZR
-        0x0000 00000 (main.go:4)        PCDATA  ZR, ZR
-        0x0000 00000 (main.go:4)        MOVD    "".arr+16(FP), R0
-        0x0004 00004 (main.go:4)        PCDATA  $2, $1
-        0x0004 00004 (main.go:4)        PCDATA  ZR, $1
-        0x0004 00004 (main.go:4)        MOVD    "".arr+8(FP), R1          // 取数组地址
+#-------------------------将栈上数据取到寄存器中------------------------------
+..................................
+        0x0000 00000 (main.go:4)        MOVD    "".arr+16(FP), R0         // 取数组arr长度信息到寄存器R0中
+..................................
+        0x0004 00004 (main.go:4)        MOVD    "".arr+8(FP), R1          // 取数组arr地址值到寄存器R1中
         0x0008 00008 (main.go:4)        FMOVD   "".x(FP), F0              // 将参数x放入F0寄存器
-        0x000c 00012 (main.go:4)        MOVD    ZR, R2                    // R2 清零
+        0x000c 00012 (main.go:4)        MOVD    ZR, R2                    // ZR表示0，此处R2 清零
+#---------------------------for循环执行逻辑----------------------------------
         0x0010 00016 (main.go:4)        JMP     24                        // 第一轮循环直接跳到条件比较 不增加i
         0x0014 00020 (main.go:4)        ADD     $1, R2, R2                // i++
         0x0018 00024 (main.go:4)        CMP     R0, R2                    // i < len(arr) 比较
         0x001c 00028 (main.go:4)        BGE     68                        // i == len(arr) 跳转到末尾
+#--------if x > 0---------
         0x0020 00032 (main.go:5)        FMOVD   ZR, F1                    // 将0复制到浮点寄存器F1
         0x0024 00036 (main.go:5)        FCMPD   F1, F0                    // 将浮点寄存器F0和F1中的值进行比较
-        0x0028 00040 (main.go:5)        CSET    GT, R3                    // F0 > F1 -> R3 = 1
+#--------arr[i] = 1-------
+        0x0028 00040 (main.go:5)        CSET    GT, R3                    // 如果F0 > F1 : R3 = 1
         0x002c 00044 (main.go:5)        CBZ     R3, 60                    // R3 == 1 即 x <= 0 跳转到60
         0x0030 00048 (main.go:6)        MOVD    $1, R3                    // x > 0
         0x0034 00052 (main.go:6)        MOVD    R3, (R1)(R2<<3)           // 将切片中值赋值为1
         0x0038 00056 (main.go:6)        JMP     20                        // 跳转到20 即循环操作i++处
+#--------x <= 0 跳到i++----
         0x003c 00060 (main.go:6)        MOVD    $1, R3                    // x <= 0
         0x0040 00064 (main.go:5)        JMP     20
-        0x0044 00068 (<unknown line number>)    PCDATA  $2, $-2
-        0x0044 00068 (<unknown line number>)    PCDATA  ZR, $-2
-        0x0044 00068 (<unknown line number>)    RET     (R30)
-        0x0000 e0 0f 40 f9 e1 0b 40 f9 e0 07 40 fd 02 00 80 d2  ..@...@...@.....
-        0x0010 02 00 00 14 42 04 00 91 5f 00 00 eb 4a 01 00 54  ....B..._...J..T
-        0x0020 e1 03 67 9e 00 20 61 1e e3 d7 9f 9a 83 00 00 b4  ..g.. a.........
-        0x0030 e3 03 40 b2 23 78 22 f8 f7 ff ff 17 e3 03 40 b2  ..@.#x".......@.
-        0x0040 f5 ff ff 17 c0 03 5f d6 00 00 00 00 00 00 00 00  ......_.........
-        rel 68+0 t=11 +0
+...........................................................................
+...........................................................................
 ```
-可以看到对于浮点数与0的比较，上述代码首先将0放入F1寄存器，之后使用FCMPD命令将F0寄存器中的值x与F1寄存器中的0值进行比较
-
-对于长度为100的切片性能如下：
+可以看到对于浮点数与0的比较，上述代码首先将0放入F1寄存器，之后使用FCMPD命令将F0寄存器中的值x与F1寄存器中的0值进行比较，对于长度为100的arr数组性能如下：
 ```bash
 goos: linux
 goarch: arm64
 BenchmarkFloatCompare-8         100000000               13.1 ns/op
 ```
-
-对于浮点数比较的ARM指令[FCMP](http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dui0068b/Bcfejdgg.html)指令有两种用法：
+这里对汇编性能优化有一定基础的读者可能会产生疑问，为什么与常数0的比较还要都放入寄存器才能进行，这里需要了解[ARMV8](https://baike.baidu.com/item/ARMv8%E6%9E%B6%E6%9E%84/10103499)的浮点数比较指令[FCMP](http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dui0068b/Bcfejdgg.html)，有两种用法：
 1. 将两个浮点寄存器中的值进行比较；
-2. 将一个浮点寄存器中的值与数值0比较；
+2. 将一个浮点寄存器中的值与数值0比较；  
+  
+可以看到对于FCMP指令，虽然浮点数与几乎所有常量比较都应该先放入寄存器中，但与0比较是一个特例，不需要将0放入一个浮点寄存器中，可以直接使用FCMP F0, $(0) 进行比较，因此上述生成的汇编代码并不是最优的
+### 2. 优化编译规则提升浮点变量比较性能
+看起来是个不复杂但大量出现的问题，编译器却做不到最优化，让代码爱好者倍感失望，怎么解决呢？下面通过go社区浮点值变量与0比较的编译规则优化案例，为您展示如何通过简单地增加编译规则给编译器赋能:    
 
-可以看到对于FCMP指令，浮点数与0比较是一个特例，不需要将0放入一个浮点寄存器中，可以直接使用FCMP F0, $(0) 进行比较，因此上述生成的汇编代码并不是最优的
+![image](images/ssa_cl.png)
 
-### 2. 浮点数与0比较的SSA规则优化
-#### 2.1 问题分析
-通过Golang的SSA工具进一步分析上述代码：
-```bash
-GOSSAFUNC=comp go tool compile main.go
-```
-可以查看Golang生成汇编代码的优化过程，这个过程使用到了[静态单赋值SSA](https://en.wikipedia.org/wiki/Static_single_assignment_form)：
-- 更多关于[Golang SSA](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/README.md)
+优化后所有的浮点值变量在与0的比较运算中都会受益。为便于读者直观的看到具体的SSA中间表示和优化前后的变化，下面通过[go编译器工具](https://golang.org/src/cmd/compile/doc.go?h=go+tool+compile)查看详细的编译过程，编译器会将SSA PASS的详细过程记录到一个ssa.html文件，使用浏览器打开后能够直观的看到每个SSA PASS对中间表示形式的修改，先看下编译规则优化前的效果图:    
 
-上述命令会生成一个ssa.html，使用浏览器打开：
+![image](images/ssa_before_opt.png)  
 
-![image](images/ssa_before_opt.png)
-
-- 该文件展示SSA优化的过程，最后一步是SSA规则优化后的最终形式：
+优化过程很多，主要关注最后一幅图，它是SSA PASS执行完的最终形式，注意图中v24和v20处，优化前将常量0放入寄存器F1中，将数组元素放入寄存器F0中，然后才会调用FCMPD浮点比较指令比较F1和F0中的值，并根据比较结果更新状态寄存器:  
 
 ![image](images/ssa_before_opt_result.png)
 
-在图中红色下划线标注处可以看到与上节含义一致的汇编代码。
+现在问题已经很清晰了，优化的目的就是期望将两条指令：FMOVD $(0.0), F1 和 FCMPD F1, F0 转变为一条指令 FCMPD $(0.0), F0    
+在这个优化中让编译器更智能的就是如下的[SSA编译规则](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/gen/generic.rules)，采用[S-表达式](https://baike.baidu.com/item/S-%E8%A1%A8%E8%BE%BE%E5%BC%8F/4409560?fr=aladdin)形式，它的作用就是找到匹配的表达式并转换为编译器期望的另一种效率更高或更接近指定体系结构的表达式，如下图所示:     
 
-#### 2.2 FCMP的SSA规则优化
-经过对比分析，发现最新的Golang版本已经对上述SSA规则进行了优化，具体优化CL见：
-[cmd/compile: optimize arm64 comparison of x and 0.0 with "FCMP $(0.0), Fn"](https://go-review.googlesource.com/c/go/+/164719)
-该优化通过SSA规则转换，所有浮点数与0的比较都会受益
-#### 2.2 SSA规则优化前后对比
-使用最新版的go编译器查看SSA
+![image](images/ssa_rule.png)    
+
+上述优化中让编译器变得更聪明是因为他新学习到了下面的转换规则:  
 ```bash
-GOROOT=/usr/local/src/ssa_end/go; GOSSAFUNC=comp go tool compile main.go
+// 将浮点数与0比较优化为表达式"FCMP $(0.0), Fn"
+(FCMPS x (FMOVSconst [0])) -> (FCMPS0 x)                // 32位浮点数x与常数0比较 -> FCMPS0 x
+(FCMPS (FMOVSconst [0]) x) -> (InvertFlags (FCMPS0 x))  // 常数0与32位浮点数x比较 -> (FCMPS0 x) 结果取反
+(FCMPD x (FMOVDconst [0])) -> (FCMPD0 x)                // 64位浮点数x与常数0比较 -> FCMPD0 x
+(FCMPD (FMOVDconst [0]) x) -> (InvertFlags (FCMPD0 x))  // 常数0与64位浮点数x比较 -> (FCMPD0 x) 结果取反
+-------------------比较结果取反规则-----------------------
+(LessThanF (InvertFlags x)) -> (GreaterThanF x)         // 取反(a < b) -> a > b
+(LessEqualF (InvertFlags x)) -> (GreaterEqualF x)       // 取反(a <= b) -> a >= b
+(GreaterThanF (InvertFlags x)) -> (LessThanF x)         // 取反(a > b) -> a < b
+(GreaterEqualF (InvertFlags x)) -> (LessEqualF x)       // 取反(a >= b) -> a <= b
 ```
+注：由于不涉及，为便于理解，在上述例子中忽略了 <type>-类型、[auxint]-变量值、{aux}-非数值变量值、 [&& extra conditions]:-条件表达式等常用的表达式类型字段，感兴趣的读者可以根据上文列举的资料进一步探究
+
+细致的读者可能已经意识到另一个问题了，规则里面有两个精简的操作码FCMPS0和FCMPD0，他们为什么更优呢？首先根据名字读者也许已经猜到他们分别表示单精度浮点数(32bit)与0比较和双精度浮点数(64bit)与0比较，他们的具体含义如下图：
+![image](images/ssa_opcode.png) 
+现在读者已经了解了编译器SSA规则优化的各个组成部分，整理一下思路，将各部分串联起来可以画出如下精简的架构图，在go原生编译器中编译规则优化是SSA PASS的重要组成部分，他帮助编译器将一些体系结构无关的通用表达式转换为更高效的体系结构相关表达式：  
+![image](images/ssa_pass_arch.png) 
+将编译器更新到最新版，再生成SSA PASS执行结果图，可以看到两条指令变成了一条：  
 ![image](images/ssa_after_opt_result.png)
-可以看到两条指令变成了一条
-- 使用Golang源码生成编译工具请参考案例[Golang在ARM64开发环境配置](../del-env-pre/del-env-pre.md)
 
-#### 2.3 SSA优化规则解析
-src/cmd/compile/internal/arm64/ssa.go
+### 3. 代码详解
+下面是优化代码详解：
+1. 操作码定义，这里增加了两个新的浮点数与0比较操作码：
 ```go
-case ssa.OpARM64FCMPS0,                     // FCMPS0 -> FCMPS $(0.0), F0
-     ssa.OpARM64FCMPD0:                     // FCMPD0 -> FCMPD $(0.0), F0
-     p := s.Prog(v.Op.Asm())                // FCMPS | FCMPD
-     p.From.Type = obj.TYPE_FCONST          // $(0.0) 的类型为常数
-     p.From.Val = math.Float64frombits(0)   // 比较的数 $(0.0)
-     p.Reg = v.Args[0].Reg()                // 第二个源操作数，即用于比较的浮点数寄存器F0
-```
-src/cmd/compile/internal/ssa/gen/ARM64.rules
-```bash
-// Optimize comparision between a floating-point value and 0.0 with "FCMP $(0.0), Fn"
-(FCMPS x (FMOVSconst [0])) -> (FCMPS0 x)                // 浮点数比较操作转换：x(float32)与常数0比较 -> FCMPS0 x
-(FCMPS (FMOVSconst [0]) x) -> (InvertFlags (FCMPS0 x))  // 浮点数比较操作转换：常数0与x(float32)比较 -> FCMPS0 x 取反
-(FCMPD x (FMOVDconst [0])) -> (FCMPD0 x)                // 浮点数比较操作转换：x(float64)与常数0比较 -> FCMPD0 x
-(FCMPD (FMOVDconst [0]) x) -> (InvertFlags (FCMPD0 x))  // 浮点数比较操作转换：常数0与x(float64)比较 -> FCMPD0 x 取反
-
-(LessThanF (InvertFlags x)) -> (GreaterThanF x)         // 浮点数比较条件判断转换：小于取反 -> 大于
-(LessEqualF (InvertFlags x)) -> (GreaterEqualF x)       // 浮点数比较条件判断转换：小于等于取反 -> 大于等于
-(GreaterThanF (InvertFlags x)) -> (LessThanF x)         // 浮点数比较条件判断转换：大于取反 -> 小于
-(GreaterEqualF (InvertFlags x)) -> (LessEqualF x)       // 浮点数比较条件判断转换：大于等于取反 -> 小于等于
-```
-src/cmd/compile/internal/ssa/gen/ARM64Ops.go
-```go
-fp1flags  = regInfo{inputs: []regMask{fp}}              // 定义一个寄存器的输入参数mask，此处fp表示所有浮点数寄存器
-
+//--------------定义一个寄存器的输入参数掩码，此处fp表示所有浮点数寄存器----------------
+fp1flags  = regInfo{inputs: []regMask{fp}}              
+..............................
+//--------------------------增加两个浮点数与0比较的操作码----------------------------
 // 定义操作FCMPS0，将浮点寄存器中的参数(float32)与0进行比较,使用汇编指令FCMPS
-{name: "FCMPS0", argLength: 1, reg: fp1flags, asm: "FCMPS", typ: "Flags"},   // arg0 compare to 0, float32
+{name: "FCMPS0", argLength: 1, reg: fp1flags, asm: "FCMPS", typ: "Flags"},   
 // 定义操作FCMPD0，将浮点寄存器中的参数(float64)与0进行比较
-{name: "FCMPD0", argLength: 1, reg: fp1flags, asm: "FCMPD", typ: "Flags"},   // arg0 compare to 0, float64
+{name: "FCMPD0", argLength: 1, reg: fp1flags, asm: "FCMPD", typ: "Flags"},  
 ```
-在src/cmd/compile/internal/ssa/gen目录下执行命令：
-```bash
- go run *.go
-```
-得到根据上述规则文件自动生成的opGen.go 和 rewriteARM64.go
-#### 2.4 工具自动生成的代码解析
-根据ARM64Ops.go生成opGen.op：
+2. 根据操作码自动生成opGen.op：
 ```go
-//OpARM64FCMPS0
 {
     name:   "FCMPS0",                 // 操作名
     argLen: 1,                        // 参数个数
@@ -159,7 +126,6 @@ fp1flags  = regInfo{inputs: []regMask{fp}}              // 定义一个寄存器
         },
     },
 },
-//OpARM64FCMPD0
 {
     name:   "FCMPD0",                 // 操作名
     argLen: 1,                        // 参数个数
@@ -171,10 +137,19 @@ fp1flags  = regInfo{inputs: []regMask{fp}}              // 定义一个寄存器
     },
 },
 ```
-
-根据ARM64.rules生成rewriteARM64.go：
+3. 为操作码FCMPS0和FCMPD0添加执行部分
+```go
+   case ssa.OpARM64FCMPS0,                     // FCMPS0 -> FCMPS $(0.0), F0
+        ssa.OpARM64FCMPD0:                     // FCMPD0 -> FCMPD $(0.0), F0
+        p := s.Prog(v.Op.Asm())                // FCMPS | FCMPD
+        p.From.Type = obj.TYPE_FCONST          // $(0.0) 的类型为常数
+        p.From.Val = math.Float64frombits(0)   // 比较的数 $(0.0)
+        p.Reg = v.Args[0].Reg()                // 第二个源操作数，即用于比较的浮点数寄存器F0
+```
+   
+4. 根据ARM64.rules自动生成的转换规则：
 ```bash
-// 以下规则会按条挨个匹配，匹配后执行转换
+//--------------在lower pass中以下规则会挨个进行匹配，匹配后执行转换----------------
 case OpARM64FCMPD:
     return rewriteValueARM64_OpARM64FCMPD_0(v)
 case OpARM64FCMPS:
@@ -188,7 +163,7 @@ case OpARM64LessEqualF:
 case OpARM64LessThanF:
     return rewriteValueARM64_OpARM64LessThanF_0(v)
 
-// x(float64)与0比较 转为 FCMPD0 x
+//------------------------x(float64)与0比较 转为 FCMPD0 x------------------------
 func rewriteValueARM64_OpARM64FCMPD_0(v *Value) bool {
     b := v.Block
     _ = b
@@ -231,7 +206,7 @@ func rewriteValueARM64_OpARM64FCMPD_0(v *Value) bool {
     return false
 }
 
-// x(float32)与0比较 转为 FCMPS0 x
+//------------------------x(float32)与0比较 转为 FCMPS0 x------------------------
 func rewriteValueARM64_OpARM64FCMPS_0(v *Value) bool {
     b := v.Block
     _ = b
@@ -274,7 +249,7 @@ func rewriteValueARM64_OpARM64FCMPS_0(v *Value) bool {
     return false
 }
 
-// 带反转标志的浮点数比较：invert(x >= 0) 转为 x <= 0
+//--------------带反转标志的浮点数比较：invert(x >= 0) 转为 x <= 0----------------
 func rewriteValueARM64_OpARM64GreaterEqualF_0(v *Value) bool {
     // match: (GreaterEqualF (InvertFlags x))
     // cond:
@@ -292,7 +267,7 @@ func rewriteValueARM64_OpARM64GreaterEqualF_0(v *Value) bool {
     return false
 }
 
-// 带反转标志的浮点数比较操作：x > 0 转换 x < 0
+//--------------带反转标志的浮点数比较操作：invert(x > 0) 转换 x < 0-----------------
 func rewriteValueARM64_OpARM64GreaterThanF_0(v *Value) bool {
     // match: (GreaterThanF (InvertFlags x))
     // cond:
@@ -310,7 +285,7 @@ func rewriteValueARM64_OpARM64GreaterThanF_0(v *Value) bool {
     return false
 }
 
-// 带反转标志的浮点数比较操作：invert(x <= 0) 转为 x >= 0
+//-------------带反转标志的浮点数比较操作：invert(x <= 0) 转为 x >= 0----------------
 func rewriteValueARM64_OpARM64LessEqualF_0(v *Value) bool {
     // match: (LessEqualF (InvertFlags x))
     // cond:
@@ -328,7 +303,7 @@ func rewriteValueARM64_OpARM64LessEqualF_0(v *Value) bool {
     return false
 }
 
-// 带反转标志的浮点数比较操作：invert(x < 0) 转为 x > 0
+//-------------带反转标志的浮点数比较操作：invert(x < 0) 转为 x > 0----------------
 func rewriteValueARM64_OpARM64LessThanF_0(v *Value) bool {
     // match: (LessThanF (InvertFlags x))
     // cond:
@@ -339,7 +314,7 @@ func rewriteValueARM64_OpARM64LessThanF_0(v *Value) bool {
             break
         }
         x := v_0.Args[0]
-        v.reset(OpARM64GreaterThanF)      // 修改OpARM64LessThanF指令为OpARM64GreaterThanF
+        v.reset(OpARM64GreaterThanF)      // 替换OpARM64LessThanF指令为OpARM64GreaterThanF
         v.AddArg(x)
         return true
     }
@@ -347,9 +322,33 @@ func rewriteValueARM64_OpARM64LessThanF_0(v *Value) bool {
 }
 ```
 
-#### 2.5 结果对比
+### 4. 动手实验
+感兴趣的读者可以按下面的命令自己动手执行一遍：
+1. 环境准备
+- 硬件配置：鲲鹏(ARM64)云Linux服务器-通用计算增强型[KC1 kc1.2xlarge.2(8核|16GB)](https://www.huaweicloud.com/product/ecs.html)  
+- Golang发行版 >= 1.12.1，此处开发环境准备请参考文章：Golang 在ARM64开发环境配置  
+- Golang github源码仓库下载，此处通过Git安装和使用进行版本控制  
+- [Golang发行版 1.12.1 ARM64版](https://golang.org/dl/)安装
+- [Golang源码仓库](https://go.googlesource.com/go)下载
+```bash
+git clone https://go.googlesource.com/go
+cd go/src
+# GOSSAFUNC关键字选择要展示的函数，本文中是comp
+GOROOT=/usr/local/src/ssa_end/go; GOSSAFUNC=comp go tool compile main.go
+
+# 在src/cmd/compile/internal/ssa/gen目录下执行命令：
+
+ go run *.go
+
+# 得到根据上述规则文件自动生成的opGen.go 和 rewriteARM64.go
+# 为操作码添加执行逻辑src/cmd/compile/internal/arm64/ssa.go
+
+# 转换规则 rewriteARM64.go
+```
+
+### 5. 结果对比
+
 对于长度为100的切片耗时下降了6.11%：
 ```bash
 name            old time/op  new time/op  delta
 FloatCompare-8  13.1ns ± 0%  12.3ns ± 0%  -6.11%  (p=0.008 n=5+5)
-```
