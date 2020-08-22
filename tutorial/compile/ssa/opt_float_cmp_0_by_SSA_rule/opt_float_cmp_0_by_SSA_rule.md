@@ -5,7 +5,8 @@
 本文以go原生编译器中ARM64架构下浮点值变量与0比较的编译规则优化为例，讲解如何编写一个优化规则来帮助编译器生成更高质量的代码，进而提升程序的运行速度。
 
 ### 1. 浮点变量与0比较问题
-[浮点数](https://baike.baidu.com/item/%E6%B5%AE%E7%82%B9%E6%95%B0/6162520)在应用开发中有广泛的应用，如用来表示一个带小数的金额或积分，经常会出现浮点数与0比较的情况，如向数据库录入一个商品时，为防止商品信息错误，可以检测录入的金额是否大于0，当用户购买产品时，可能需要先做一个验证，检测账户上是否有大于0的金额，如果满足再去查询商品信息、录入订单等，这样可以在交易的开始阶段排除一些无效或恶意的请求。比如做一个活动，用浮点数表示积分，向用户展示一个积分榜单，但是需要屏蔽掉积分小于等于0的条目，可能会用到如下函数：
+[浮点数](https://baike.baidu.com/item/%E6%B5%AE%E7%82%B9%E6%95%B0/6162520)在应用开发中有广泛的应用，如用来表示一个带小数的金额或积分，经常会出现浮点数与0比较的情况，如向数据库录入一个商品时，为防止商品信息错误，可以检测录入的金额是否大于0，当用户购买产品时，可能需要先做一个验证，检测账户上是否有大于0的金额，如果满足再去查询商品信息、录入订单等，这样可以在交易的开始阶段排除一些无效或恶意的请求。
+很多直播网站会举行年度活动，通过榜单展现用户活动期间累计送出礼物的金额，排名靠前的用户会登上榜单。经常用浮点数表示累计金额，活动刚开始时，总是需要屏蔽掉积分小于等于0的条目，可能会用到如下函数：
 ```go
 func comp(x float64, arr []int) {
     for i := 0; i < len(arr); i++ {
@@ -92,13 +93,18 @@ BenchmarkFloatCompare-8         100000000               13.1 ns/op
 (GreaterThanF (InvertFlags x)) -> (LessThanF x)         // 取反(a > b) -> a < b
 (GreaterEqualF (InvertFlags x)) -> (LessEqualF x)       // 取反(a >= b) -> a <= b
 ```
-注：由于不涉及，为便于理解，在上述例子中忽略了 <type>-类型、[auxint]-变量值、{aux}-非数值变量值、 [&& extra conditions]:-条件表达式等常用的表达式类型字段，感兴趣的读者可以根据上文列举的资料进一步探究
+*注：由于不涉及，为便于理解，在上述例子中忽略了 <type>-类型、[auxint]-变量值、{aux}-非数值变量值、 [&& extra conditions]:-条件表达式等常用的表达式类型字段，感兴趣的读者可以根据上文列举的资料进一步探究*
 
 细致的读者可能已经意识到另一个问题了，规则里面有两个精简的操作码FCMPS0和FCMPD0，他们为什么更优呢？首先根据名字读者也许已经猜到他们分别表示单精度浮点数(32bit)与0比较和双精度浮点数(64bit)与0比较，他们的具体含义如下图：
+
 ![image](images/ssa_opcode.png) 
+
 现在读者已经了解了编译器SSA规则优化的各个组成部分，整理一下思路，将各部分串联起来可以画出如下精简的架构图，在go原生编译器中编译规则优化是SSA PASS的重要组成部分，他帮助编译器将一些体系结构无关的通用表达式转换为更高效的体系结构相关表达式：  
+
 ![image](images/ssa_pass_arch.png) 
+
 将编译器更新到最新版，再生成SSA PASS执行结果图，可以看到两条指令变成了一条：  
+
 ![image](images/ssa_after_opt_result.png)
 
 ### 3. 代码详解
@@ -119,7 +125,7 @@ fp1flags  = regInfo{inputs: []regMask{fp}}
 {
     name:   "FCMPS0",                 // 操作名
     argLen: 1,                        // 参数个数
-    asm:    arm64.AFCMPS,             // 对应的机器指令
+    asm:    arm64.AFCMPS,             // 对应的机器指令，此处为ARM64平台的FCMPS
     reg: regInfo{
         inputs: []inputInfo{          // 支持的输入参数寄存器
             {0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
@@ -129,7 +135,7 @@ fp1flags  = regInfo{inputs: []regMask{fp}}
 {
     name:   "FCMPD0",                 // 操作名
     argLen: 1,                        // 参数个数
-    asm:    arm64.AFCMPD,             // 对应的机器指令
+    asm:    arm64.AFCMPD,             // 对应的机器指令，此处为ARM64平台的FCMPD
     reg: regInfo{
         inputs: []inputInfo{          // 支持的输入参数寄存器
             {0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
@@ -137,7 +143,7 @@ fp1flags  = regInfo{inputs: []regMask{fp}}
     },
 },
 ```
-3. 为操作码FCMPS0和FCMPD0添加执行部分
+3. 操作码FCMPS0和FCMPD0转为[prog](https://github.com/golang/go/blob/master/src/cmd/internal/obj/link.go)形式，每个prog对应具体的一条指令，链接时会用到。
 ```go
    case ssa.OpARM64FCMPS0,                     // FCMPS0 -> FCMPS $(0.0), F0
         ssa.OpARM64FCMPD0:                     // FCMPD0 -> FCMPD $(0.0), F0
@@ -323,32 +329,59 @@ func rewriteValueARM64_OpARM64LessThanF_0(v *Value) bool {
 ```
 
 ### 4. 动手实验
-感兴趣的读者可以按下面的命令自己动手执行一遍：
-1. 环境准备
-- 硬件配置：鲲鹏(ARM64)云Linux服务器-通用计算增强型[KC1 kc1.2xlarge.2(8核|16GB)](https://www.huaweicloud.com/product/ecs.html)  
-- Golang发行版 >= 1.12.1，此处开发环境准备请参考文章：Golang 在ARM64开发环境配置  
-- Golang github源码仓库下载，此处通过Git安装和使用进行版本控制  
-- [Golang发行版 1.12.1 ARM64版](https://golang.org/dl/)安装
-- [Golang源码仓库](https://go.googlesource.com/go)下载
+感兴趣的读者可以按照本节自己动手执行一遍，体验编译规则优化如何帮助编译器变得更聪明：
+- 环境准备
+1. 硬件配置：鲲鹏(ARM64)云Linux服务器-[通用计算增强型KC1 kc1.2xlarge.2(8核|16GB)](https://www.huaweicloud.com/product/ecs.html)
+2. [Golang发行版 1.12.1 — 1.12.17](https://golang.org/dl/)，此处开发环境准备请参考文章：[Golang 在ARM64开发环境配置](https://github.com/OptimizeLab/docs/blob/master/tutorial/environment/go_dev_env/go_dev_env.md)
+3. [Golang github源码仓库](https://github.com/golang/go)下载，此处通过[Git安装和使用](https://git-scm.com/book/zh/v2)进行版本控制。
+4. [测试代码](https://github.com/OptimizeLab/sample)
+5. [编译规则代码生成工具](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/gen/README)
+
+- 操作步骤
 ```bash
-git clone https://go.googlesource.com/go
-cd go/src
-# GOSSAFUNC关键字选择要展示的函数，本文中是comp
-GOROOT=/usr/local/src/ssa_end/go; GOSSAFUNC=comp go tool compile main.go
+# 准备一个测试目录如/usr/local/src/
+cd /usr/local/src
+# 拉取测试用例代码
+git clone https://github.com/OptimizeLab/sample
+# 进入compile/ssa/opt_float_cmp_0_by_SSA_rule/src
+cd /usr/local/src/sample/compile/ssa/opt_float_cmp_0_by_SSA_rule/src
+# go发行版1.12没有包含这个优化的编译规则，因此直接无需从go源码编译
+# 使用系统配置的go编译器，获取并查看优化前的ssa.html
+GOSSAFUNC=comp go tool compile main.go
+# 使用go benchmark命令测试性能并记录在文件before-ssa-bench.txt中
+go test -bench BenchmarkFloatCompare -count=5 > before-ssa-bench.txt
 
-# 在src/cmd/compile/internal/ssa/gen目录下执行命令：
+# 接下来使用优化后的go编译器获取ssa.html
+# 找到一个放置go源码仓的目录，如/usr/local/src/exp
+mkdir /usr/local/src/exp
+cd /usr/local/src/exp
+# 通过git工具拉取github代码托管平台上golang的代码仓
+git clone https://github.com/golang/go
+# 拉取的最新源码已经包含了这个优化，因此可以直接编译获得最新的go编译器
+# 进入源码目录
+cd /usr/local/src/exp/go/src
+# 编译go源码，生成go开发环境
+bash ./make.bash
+# 切换回测试代码目录，GOROOT指定GOROOT目录
+cd /usr/local/src/sample/compile/ssa/opt_float_cmp_0_by_SSA_rule/src
+# GOSSAFUNC关键字选择要展示的函数，本文中是comp，生成优化后的ssa.html
+GOROOT=/usr/local/src/exp/go; GOSSAFUNC=comp go tool compile main.go
+# 使用go benchmark命令测试性能并记录在文件after-ssa-bench.txt中
+GOROOT=/usr/local/src/exp/go; go test -bench BenchmarkFloatCompare -count=5 > after-ssa-bench.txt
+# benchstat 对比结果
+benchstat before-ssa-bench.txt after-ssa-bench.txt
 
- go run *.go
-
-# 得到根据上述规则文件自动生成的opGen.go 和 rewriteARM64.go
-# 为操作码添加执行逻辑src/cmd/compile/internal/arm64/ssa.go
-
-# 转换规则 rewriteARM64.go
+# 值得一提的是开发新的编译规则时，只需要编写.rules文件，并通过[编译规则代码生成工具]生成
+# 生成文件opGen.go 和 rewriteARM64.go
+cd /usr/local/src/exp/go/src/cmd/compile/internal/ssa/gen
+go run *.go
 ```
 
 ### 5. 结果对比
+按[动手实验]章节操作，可以看到对于长度为100的切片耗时下降了6.11%：对比结果如下：
 
-对于长度为100的切片耗时下降了6.11%：
-```bash
-name            old time/op  new time/op  delta
-FloatCompare-8  13.1ns ± 0%  12.3ns ± 0%  -6.11%  (p=0.008 n=5+5)
+用例名/(字节数组大小-核心数)|优化前每操作耗时 time/op|优化后每操作耗时 time/op|耗时对比(p:偏差 n:执行次数)
+---|---|---|---|
+FloatCompare-8   |   13.1ns ± 0%   |   12.3ns ± 0%   |  -6.11%  (p=0.008 n=5+5) 
+
+[注]ns/op:每次函数执行耗费的纳秒时间;
