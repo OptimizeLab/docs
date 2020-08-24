@@ -1,12 +1,12 @@
-# 优化编译规则提升变量比较性能的实践
+# 开源优化案例-优化编译规则提升变量比较性能
 [编译器](https://baike.baidu.com/item/%E7%BC%96%E8%AF%91%E5%99%A8/8853067?fr=aladdin)的作用是将高级语言的源代码翻译为低级语言的目标代码。通常为了便于优化处理，编译器会将源代码转换为中间表示形式([Intermediate representation](http://wanweibaike.com/wiki-%E4%B8%AD%E9%96%93%E8%AA%9E%E8%A8%80))，很多优化都是作用在这个形式上，如下面将介绍的编译规则优化。  
 
 在使用go编程时通常使用[go语言原生编译器](https://github.com/golang/go/blob/master/src/cmd/compile/README.md)，它包括[语法分析](https://baike.baidu.com/item/%E8%AF%AD%E6%B3%95%E5%88%86%E6%9E%90)、[AST变换](https://baike.baidu.com/item/%E6%8A%BD%E8%B1%A1%E8%AF%AD%E6%B3%95%E6%A0%91/6129952?fr=aladdin)、[静态单赋值SSA PASS](https://github.com/golang/go/tree/master/src/cmd/compile/internal/ssa)、机器码生成等多个编译过程。其中在生成SSA中间表示形式后进行了多个编译优化过程[Compiler passes](https://github.com/golang/go/tree/master/src/cmd/compile/internal/ssa#compiler-passes)，每个pass都会对SSA形式的函数做转换，如[deadcode elimination](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/deadcode.go)会检测并删除不会被执行的代码和无用的变量。在所有pass中[lower](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/lower.go)会根据编写好的优化规则将SSA中间表示从与体系结构(如[X86](https://baike.baidu.com/item/Intel%20x86?fromtitle=x86&fromid=6150538)、[ARM](https://baike.baidu.com/item/ARM%E6%9E%B6%E6%9E%84/9154278)等)无关的转换为体系结构相关的，转换后的形式在对应的体系结构上才是真正有效的。  
 
 本文以go原生编译器中ARM64架构下浮点值变量与0比较的编译规则优化为例，讲解如何编写一个优化规则来帮助编译器生成更高质量的代码，进而提升程序的运行速度。
 
-### 1. 浮点变量与0比较问题
-[浮点数](https://baike.baidu.com/item/%E6%B5%AE%E7%82%B9%E6%95%B0/6162520)在应用开发中有广泛的应用，如用来表示一个带小数的金额或积分，经常会出现浮点数与0比较的情况，如向数据库录入一个商品时，为防止商品信息错误，可以检测录入的金额是否大于0，当用户购买产品时，可能需要先做一个验证，检测账户上是否有大于0的金额，如果满足再去查询商品信息、录入订单等，这样可以在交易的开始阶段排除一些无效或恶意的请求。
+### 1. 浮点变量比较场景
+[浮点数](https://baike.baidu.com/item/%E6%B5%AE%E7%82%B9%E6%95%B0/6162520)在应用开发中有广泛的应用，如用来表示一个带小数的金额或积分，经常会出现浮点数与0比较的情况，如向数据库录入一个商品时，为防止商品信息错误，可以检测录入的金额是否大于0，当用户购买产品时，可能需要先做一个验证，检测账户上金额是否大于0，如果满足再去查询商品信息、录入订单等，这样可以在交易的开始阶段排除一些无效或恶意的请求。
 
 很多直播网站会举行年度活动，通过榜单展现用户活动期间累计送出礼物的金额，排名靠前的用户会登上榜单。经常用浮点数表示累计金额，活动刚开始时，总是需要屏蔽掉积分小于等于0的条目，可能会用到如下函数：
 
