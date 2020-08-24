@@ -1,14 +1,14 @@
 # 开源优化案例-优化编译规则提升变量比较性能
-[编译器](https://baike.baidu.com/item/%E7%BC%96%E8%AF%91%E5%99%A8/8853067?fr=aladdin)的作用是将高级语言的源代码翻译为低级语言的目标代码。通常为了便于优化处理，编译器会将源代码转换为中间表示形式([Intermediate representation](http://wanweibaike.com/wiki-%E4%B8%AD%E9%96%93%E8%AA%9E%E8%A8%80))，很多优化都是作用在这个形式上，如下面将介绍的编译规则优化。  
+[编译器](https://baike.baidu.com/item/%E7%BC%96%E8%AF%91%E5%99%A8/8853067?fr=aladdin)的作用是将高级语言的源代码翻译为低级语言的目标代码。通常为了便于优化处理，编译器会将源代码转换为中间表示形式([Intermediate representation](http://wanweibaike.com/wiki-%E4%B8%AD%E9%96%93%E8%AA%9E%E8%A8%80))，很多编译优化过程都是作用在这个形式上，如下面将介绍的优化编译规则。  
 
-在使用go编程时通常使用[go语言原生编译器](https://github.com/golang/go/blob/master/src/cmd/compile/README.md)，它包括[语法分析](https://baike.baidu.com/item/%E8%AF%AD%E6%B3%95%E5%88%86%E6%9E%90)、[AST变换](https://baike.baidu.com/item/%E6%8A%BD%E8%B1%A1%E8%AF%AD%E6%B3%95%E6%A0%91/6129952?fr=aladdin)、[静态单赋值SSA PASS](https://github.com/golang/go/tree/master/src/cmd/compile/internal/ssa)、机器码生成等多个编译过程。其中在生成SSA中间表示形式后进行了多个编译优化过程[Compiler passes](https://github.com/golang/go/tree/master/src/cmd/compile/internal/ssa#compiler-passes)，每个pass都会对SSA形式的函数做转换，如[deadcode elimination](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/deadcode.go)会检测并删除不会被执行的代码和无用的变量。在所有pass中[lower](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/lower.go)会根据编写好的优化规则将SSA中间表示从与体系结构(如[X86](https://baike.baidu.com/item/Intel%20x86?fromtitle=x86&fromid=6150538)、[ARM](https://baike.baidu.com/item/ARM%E6%9E%B6%E6%9E%84/9154278)等)无关的转换为体系结构相关的，转换后的形式在对应的体系结构上才是真正有效的。  
+在使用go编程时通常使用[go语言原生编译器](https://github.com/golang/go/blob/master/src/cmd/compile/README.md)，它包括[语法分析](https://baike.baidu.com/item/%E8%AF%AD%E6%B3%95%E5%88%86%E6%9E%90)、[AST变换](https://baike.baidu.com/item/%E6%8A%BD%E8%B1%A1%E8%AF%AD%E6%B3%95%E6%A0%91/6129952?fr=aladdin)、[静态单赋值SSA PASS](https://github.com/golang/go/tree/master/src/cmd/compile/internal/ssa)、机器码生成等多个编译过程。其中在生成SSA中间表示形式后进行了多个编译优化过程[Compiler PASS](https://github.com/golang/go/tree/master/src/cmd/compile/internal/ssa#compiler-passes)，每个PASS都会对SSA形式的函数做转换，如[deadcode elimination](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/deadcode.go)会检测并删除不会被执行的代码和无用的变量。在所有pass中[lower](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/lower.go)会根据编写好的优化规则将SSA中间表示从与体系结构(如[X86](https://baike.baidu.com/item/Intel%20x86?fromtitle=x86&fromid=6150538)、[ARM](https://baike.baidu.com/item/ARM%E6%9E%B6%E6%9E%84/9154278)等)无关的转换为体系结构相关的，转换后的形式在对应的体系结构上才是真正有效的。  
 
 本文以go原生编译器中ARM64架构下浮点值变量与0比较的编译规则优化为例，讲解如何编写一个优化规则来帮助编译器生成更高质量的代码，进而提升程序的运行速度。
 
 ### 1. 浮点变量比较场景
 [浮点数](https://baike.baidu.com/item/%E6%B5%AE%E7%82%B9%E6%95%B0/6162520)在应用开发中有广泛的应用，如用来表示一个带小数的金额或积分，经常会出现浮点数与0比较的情况，如向数据库录入一个商品时，为防止商品信息错误，可以检测录入的金额是否大于0，当用户购买产品时，可能需要先做一个验证，检测账户上金额是否大于0，如果满足再去查询商品信息、录入订单等，这样可以在交易的开始阶段排除一些无效或恶意的请求。
 
-很多直播网站会举行年度活动，通过榜单展现用户活动期间累计送出礼物的金额，排名靠前的用户会登上榜单。经常用浮点数表示累计金额，活动刚开始时，总是需要屏蔽掉积分小于等于0的条目，可能会用到如下函数：
+很多直播网站会举行年度活动，通过榜单展现用户活动期间累计送出礼物的金额，排名靠前的用户会登上榜单。经常用浮点数表示累计金额，活动刚开始时，需要屏蔽掉积分小于等于0的条目，可能会用到如下函数：
 
 ```go
 func comp(x float64, arr []int) {
@@ -54,21 +54,20 @@ go tool compile -S main.go
 ...........................................................................
 ...........................................................................
 ```
-可以看到对于浮点数与0的比较，上述代码首先将0放入F1寄存器，之后使用FCMPD命令将F0寄存器中的值x与F1寄存器中的0值进行比较，对于长度为100的arr数组性能如下：
-```bash
-goos: linux
-goarch: arm64
-BenchmarkFloatCompare-8         100000000               13.1 ns/op
-```
+可以看到对于浮点数与0的比较，上述代码首先将0放入F1寄存器，之后使用FCMPD命令将F0寄存器中的变量值x与F1寄存器中的0值进行比较，对于长度为100的arr数组性能如下：
+
+用例名-核心数|执行次数|每操作耗时 time/op
+---|---|---|
+FloatCompare-8   |  100000000  |  13.1ns ± 0%  
 
 这里对汇编性能优化有一定基础的读者可能会产生疑问，为什么与常数0的比较还要都放入寄存器才能进行，这里需要了解[ARMV8](https://baike.baidu.com/item/ARMv8%E6%9E%B6%E6%9E%84/10103499)的浮点数比较指令[FCMP](http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dui0068b/Bcfejdgg.html)，有两种用法：
 1. 将两个浮点寄存器中的值进行比较；
 2. 将一个浮点寄存器中的值与数值0比较；  
   
-可以看到对于FCMP指令，虽然浮点数与几乎所有常量比较都应该先放入寄存器中，但与0比较是一个特例，不需要将0放入一个浮点寄存器中，可以直接使用FCMP F0, $(0) 进行比较，因此上述生成的汇编代码并不是最优的
+可以看到对于FCMP指令，虽然浮点数与几乎所有常量比较都必须先放入寄存器中，但与0比较是一个特例，不需要将0放入一个浮点寄存器中，可以直接使用FCMP F0, $(0) 进行比较，因此上述生成的汇编代码并不是最优的
 
 ### 2. 优化编译规则提升浮点变量比较性能
-看起来是个不复杂但大量出现的问题，编译器却做不到最优化，让代码爱好者倍感失望，怎么解决呢？下面通过go社区浮点值变量与0比较的编译规则优化案例，为您展示如何通过简单地增加编译规则给编译器赋能:    
+看起来是个不复杂但大量出现的问题，编译器却做不到最优化，让代码爱好者倍感失望，怎么解决呢？下面是go社区浮点值变量与0比较的编译规则优化案例，它通过简单地增加编译规则给编译器赋能:    
 
 ![image](images/ssa_cl.png)
 
@@ -76,13 +75,13 @@ BenchmarkFloatCompare-8         100000000               13.1 ns/op
 
 ![image](images/ssa_before_opt.png)  
 
-优化过程很多，主要关注最后一幅图，它是SSA PASS执行完的最终形式，注意图中v24和v20处，优化前将常量0放入寄存器F1中，将数组元素放入寄存器F0中，然后才会调用FCMPD浮点比较指令比较F1和F0中的值，并根据比较结果更新状态寄存器:  
+SSA PASS过程很多，主要关注最后一幅图，它是SSA PASS执行完的最终形式，注意图中v24和v20处，优化前将常量0放入寄存器F1中，将数组元素放入寄存器F0中，然后才会调用FCMPD浮点比较指令比较F1和F0中的值，并根据比较结果更新状态寄存器:  
 
 ![image](images/ssa_before_opt_result.png)
 
 现在问题已经很清晰了，优化的目的就是期望将两条指令：FMOVD $(0.0), F1 和 FCMPD F1, F0 转变为一条指令 FCMPD $(0.0), F0    
 
-在这个优化中让编译器更智能的技术就是如下的[SSA编译规则](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/gen/generic.rules)，采用[S-表达式](https://baike.baidu.com/item/S-%E8%A1%A8%E8%BE%BE%E5%BC%8F/4409560?fr=aladdin)形式，它的作用就是找到匹配的表达式并转换为编译器期望的另一种效率更高或更接近指定体系结构的表达式，如下图所示:     
+在这个优化中让编译器更智能的技术就是如下的[SSA编译规则](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/gen/generic.rules)，采用[S-表达式](https://baike.baidu.com/item/S-%E8%A1%A8%E8%BE%BE%E5%BC%8F/4409560?fr=aladdin)形式，它的作用就是找到匹配的表达式并转换为编译器期望的另一种效率更高或体系结构相关的表达式，如下图所示:     
 
 ![image](images/ssa_rule.png)    
 
@@ -124,11 +123,11 @@ fp1flags  = regInfo{inputs: []regMask{fp}}
 //--------------------------增加两个浮点数与0比较的操作码----------------------------
 // 定义操作FCMPS0，将浮点寄存器中的参数(float32)与0进行比较,使用汇编指令FCMPS
 {name: "FCMPS0", argLength: 1, reg: fp1flags, asm: "FCMPS", typ: "Flags"},   
-// 定义操作FCMPD0，将浮点寄存器中的参数(float64)与0进行比较
+// 定义操作FCMPD0，将浮点寄存器中的参数(float64)与0进行比较,使用汇编指令FCMPD
 {name: "FCMPD0", argLength: 1, reg: fp1flags, asm: "FCMPD", typ: "Flags"},  
 ```
 
-2. 根据操作码自动生成opGen.op：
+2. 根据操作码自动生成的opGen.op：
 
 ```go
 {
@@ -342,7 +341,7 @@ func rewriteValueARM64_OpARM64LessThanF_0(v *Value) bool {
 
 ### 4. 动手实验
 
-感兴趣的读者可以按照本节自己动手执行一遍，体验编译规则优化如何帮助编译器变得更聪明：
+感兴趣的读者可以按照本章自己动手执行一遍，体验编译规则优化如何帮助编译器变得更聪明：
 - 环境准备
 1. 硬件配置：鲲鹏(ARM64)云Linux服务器-[通用计算增强型KC1 kc1.2xlarge.2(8核|16GB)](https://www.huaweicloud.com/product/ecs.html)
 2. [Golang发行版 1.12.1 — 1.12.17](https://golang.org/dl/)，此处开发环境准备请参考文章：[Golang 在ARM64开发环境配置](https://github.com/OptimizeLab/docs/blob/master/tutorial/environment/go_dev_env/go_dev_env.md)
