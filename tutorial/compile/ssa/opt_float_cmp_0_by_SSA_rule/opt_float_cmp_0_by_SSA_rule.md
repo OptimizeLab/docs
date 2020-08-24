@@ -1,9 +1,9 @@
-# 开源优化案例-优化编译规则提升变量比较性能
-[编译器](https://baike.baidu.com/item/%E7%BC%96%E8%AF%91%E5%99%A8/8853067?fr=aladdin)的作用是将高级语言的源代码翻译为低级语言的目标代码。通常为了便于优化处理，编译器会将源代码转换为中间表示形式([Intermediate representation](http://wanweibaike.com/wiki-%E4%B8%AD%E9%96%93%E8%AA%9E%E8%A8%80))，很多编译优化过程都是作用在这个形式上，如下面将介绍的优化编译规则。  
+# 开源软件优化案例-优化编译规则提升程序性能
+[编译器](https://baike.baidu.com/item/%E7%BC%96%E8%AF%91%E5%99%A8/8853067?fr=aladdin)的作用是将高级语言的源代码翻译为低级语言的目标代码。通常为了便于优化处理，编译器会将源代码转换为中间表示形式([Intermediate representation](http://wanweibaike.com/wiki-%E4%B8%AD%E9%96%93%E8%AA%9E%E8%A8%80))，很多编译优化过程都是作用在这个形式上，如下面将介绍的通过给编译器添加编译规则优化性能。  
 
-在使用go编程时通常使用[go语言原生编译器](https://github.com/golang/go/blob/master/src/cmd/compile/README.md)，它包括[语法分析](https://baike.baidu.com/item/%E8%AF%AD%E6%B3%95%E5%88%86%E6%9E%90)、[AST变换](https://baike.baidu.com/item/%E6%8A%BD%E8%B1%A1%E8%AF%AD%E6%B3%95%E6%A0%91/6129952?fr=aladdin)、[静态单赋值SSA PASS](https://github.com/golang/go/tree/master/src/cmd/compile/internal/ssa)、机器码生成等多个编译过程。其中在生成SSA中间表示形式后进行了多个编译优化过程[Compiler PASS](https://github.com/golang/go/tree/master/src/cmd/compile/internal/ssa#compiler-passes)，每个PASS都会对SSA形式的函数做转换，如[deadcode elimination](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/deadcode.go)会检测并删除不会被执行的代码和无用的变量。在所有pass中[lower](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/lower.go)会根据编写好的优化规则将SSA中间表示从与体系结构(如[X86](https://baike.baidu.com/item/Intel%20x86?fromtitle=x86&fromid=6150538)、[ARM](https://baike.baidu.com/item/ARM%E6%9E%B6%E6%9E%84/9154278)等)无关的转换为体系结构相关的，转换后的形式在对应的体系结构上才是真正有效的。  
+在使用go编程时通常使用[go语言原生编译器](https://github.com/golang/go/blob/master/src/cmd/compile/README.md)，它包括[语法分析](https://baike.baidu.com/item/%E8%AF%AD%E6%B3%95%E5%88%86%E6%9E%90)、[AST变换](https://baike.baidu.com/item/%E6%8A%BD%E8%B1%A1%E8%AF%AD%E6%B3%95%E6%A0%91/6129952?fr=aladdin)、[静态单赋值SSA PASS](https://github.com/golang/go/tree/master/src/cmd/compile/internal/ssa)、机器码生成等多个编译过程。其中在生成SSA中间表示形式后进行了多个编译优化过程[PASS](https://github.com/golang/go/tree/master/src/cmd/compile/internal/ssa#compiler-passes)，每个PASS都会对SSA形式的函数做转换，比如[deadcode elimination](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/deadcode.go)会检测并删除不会被执行的代码和无用的变量。在所有PASS中[lower](https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/lower.go)会根据编写好的优化规则将SSA中间表示从与体系结构(如[X86](https://baike.baidu.com/item/Intel%20x86?fromtitle=x86&fromid=6150538)、[ARM](https://baike.baidu.com/item/ARM%E6%9E%B6%E6%9E%84/9154278)等)无关的转换为体系结构相关的，这是通过添加大量编译规则实现的，是本文的主要关注点。  
 
-本文以go原生编译器中ARM64架构下浮点值变量与0比较的编译规则优化为例，讲解如何编写一个优化规则来帮助编译器生成更高质量的代码，进而提升程序的运行速度。
+本文以go原生编译器中ARM64架构下浮点值变量与0比较的编译规则优化为例，讲解如何编写一个编译规则来帮助编译器生成更高质量的代码，进而提升程序的运行速度。
 
 ### 1. 浮点变量比较场景
 [浮点数](https://baike.baidu.com/item/%E6%B5%AE%E7%82%B9%E6%95%B0/6162520)在应用开发中有广泛的应用，如用来表示一个带小数的金额或积分，经常会出现浮点数与0比较的情况，如向数据库录入一个商品时，为防止商品信息错误，可以检测录入的金额是否大于0，当用户购买产品时，可能需要先做一个验证，检测账户上金额是否大于0，如果满足再去查询商品信息、录入订单等，这样可以在交易的开始阶段排除一些无效或恶意的请求。
@@ -20,7 +20,7 @@ func comp(x float64, arr []int) {
 }
 ```
 
-使用如下compile命令查看该函数的汇编代码(为便于理解，省略了部分无用代码)：
+使用[Go compile](https://golang.org/cmd/compile/)工具查看该函数的汇编代码(为便于理解，省略了部分无用代码)：
 ```bash
 go tool compile -S main.go
 ```
@@ -54,13 +54,14 @@ go tool compile -S main.go
 ...........................................................................
 ...........................................................................
 ```
+
 可以看到对于浮点数与0的比较，上述代码首先将0放入F1寄存器，之后使用FCMPD命令将F0寄存器中的变量值x与F1寄存器中的0值进行比较，对于长度为100的arr数组性能如下：
 
 用例名-核心数|执行次数|每操作耗时 time/op
 ---|---|---|
 FloatCompare-8   |  100000000  |  13.1ns ± 0%  
 
-这里对汇编性能优化有一定基础的读者可能会产生疑问，为什么与常数0的比较还要都放入寄存器才能进行，这里需要了解[ARMV8](https://baike.baidu.com/item/ARMv8%E6%9E%B6%E6%9E%84/10103499)的浮点数比较指令[FCMP](http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dui0068b/Bcfejdgg.html)，有两种用法：
+这里对汇编性能优化有一定基础的读者可能会产生疑问，为什么一个浮点变量与常数0的比较要都放入寄存器才能进行，这里需要了解[ARMV8](https://baike.baidu.com/item/ARMv8%E6%9E%B6%E6%9E%84/10103499)的浮点数比较指令[FCMP](http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dui0068b/Bcfejdgg.html)，它有两种用法：
 1. 将两个浮点寄存器中的值进行比较；
 2. 将一个浮点寄存器中的值与数值0比较；  
   
@@ -85,7 +86,7 @@ SSA PASS过程很多，主要关注最后一幅图，它是SSA PASS执行完的�
 
 ![image](images/ssa_rule.png)    
 
-上述优化中让编译器变得更聪明是因为他新学习到了下面的转换规则:  
+上述优化中让编译器变得更聪明是因为他新学习到了下面的转换规则，初步理解编译规则语法后不难理解:  
 ```bash
 // 将浮点数与0比较优化为表达式"FCMP $(0.0), Fn"
 (FCMPS x (FMOVSconst [0])) -> (FCMPS0 x)                // 32位浮点数x与常数0比较 -> FCMPS0 x
@@ -104,11 +105,11 @@ SSA PASS过程很多，主要关注最后一幅图，它是SSA PASS执行完的�
 
 ![image](images/ssa_opcode.png) 
 
-现在读者已经了解了编译器SSA规则优化的各个组成部分，整理一下思路，将各部分串联起来可以画出如下精简的架构图，在go原生编译器中编译规则优化是SSA PASS的重要组成部分，他帮助编译器将一些体系结构无关的通用表达式转换为更高效的表达式，如对于冗余的条件判断取反表达式，去掉取反操作，并直接对判断条件取反，如invert(<=)转变为>，体系结构无关表达式转为与体系结构(ARM64、X86等)相关的表达式：  
+现在读者已经了解了编译器SSA规则优化的各个组成部分，整理一下思路，将各部分串联起来可以画出如下精简的架构图，在go原生编译器中编译规则优化是SSA PASS的重要组成部分，他帮助编译器将一些体系结构无关的通用表达式转换为更高效的表达式，如对于冗余的条件判断取反表达式，去掉取反操作，直接对判断条件取反，如invert(<=)转变为>，体系结构无关表达式转为与体系结构(ARM64、X86等)相关的表达式：  
 
 ![image](images/ssa_pass_arch.png) 
 
-将编译器更新到最新版，再生成SSA PASS执行结果图，可以看到两条指令变成了一条：  
+增加上述编译规则，将编译器更新到最新版，再生成SSA PASS执行结果图，可以看到最终两条指令变成了一条：  
 
 ![image](images/ssa_after_opt_result.png)
 
@@ -127,7 +128,7 @@ fp1flags  = regInfo{inputs: []regMask{fp}}
 {name: "FCMPD0", argLength: 1, reg: fp1flags, asm: "FCMPD", typ: "Flags"},  
 ```
 
-2. 根据操作码自动生成的opGen.op：
+2. 根据操作码自动生成opGen.go：
 
 ```go
 {
@@ -162,8 +163,22 @@ fp1flags  = regInfo{inputs: []regMask{fp}}
         p.From.Val = math.Float64frombits(0)   // 比较的数 $(0.0)
         p.Reg = v.Args[0].Reg()                // 第二个源操作数，即用于比较的浮点数寄存器F0
 ```
-   
-4. 根据ARM64.rules自动生成的转换规则：
+
+4. 在ARM64.rules中加入新的SSA编译规则
+```bash
+// 将浮点数与0比较优化为表达式"FCMP $(0.0), Fn"
+(FCMPS x (FMOVSconst [0])) -> (FCMPS0 x)                // 32位浮点数x与常数0比较 -> FCMPS0 x
+(FCMPS (FMOVSconst [0]) x) -> (InvertFlags (FCMPS0 x))  // 常数0与32位浮点数x比较 -> (FCMPS0 x) 结果取反
+(FCMPD x (FMOVDconst [0])) -> (FCMPD0 x)                // 64位浮点数x与常数0比较 -> FCMPD0 x
+(FCMPD (FMOVDconst [0]) x) -> (InvertFlags (FCMPD0 x))  // 常数0与64位浮点数x比较 -> (FCMPD0 x) 结果取反
+-------------------比较结果取反规则-----------------------
+(LessThanF (InvertFlags x)) -> (GreaterThanF x)         // 取反(a < b) -> a > b
+(LessEqualF (InvertFlags x)) -> (GreaterEqualF x)       // 取反(a <= b) -> a >= b
+(GreaterThanF (InvertFlags x)) -> (LessThanF x)         // 取反(a > b) -> a < b
+(GreaterEqualF (InvertFlags x)) -> (LessEqualF x)       // 取反(a >= b) -> a <= b
+```
+
+5. 根据ARM64.rules自动生成的go转换代码：
 
 ```bash
 //--------------在lower pass中以下规则会挨个进行匹配，匹配后执行转换----------------
