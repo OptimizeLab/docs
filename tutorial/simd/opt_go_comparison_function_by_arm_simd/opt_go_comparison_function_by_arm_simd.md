@@ -7,7 +7,7 @@
 
 ### 1. 字符串比较的性能问题
 
-先看一个常见的问题，在各行各业的服务系统中，用户登录需要验证用户名或ID，订购货物需要对比货物ID，出行需要验证票号等等，这些都离不开字符串比较操作，字符串实际上就是字节数组，在Golang语言中可以表示成[]byte的形式，字符串的比较即两个数组中对应byte的比较。因此可以直观的写出如下的比较函数代码:
+先看一个常见的问题，在各行各业的服务系统中，用户登录需要验证用户名或ID，订购货物需要对比货物ID，出行需要验证票号等等，这些都离不开字符串比较操作，字符串实际上就是字节数组，在Go语言中可以表示成[]byte的形式，字符串的比较即两个数组中对应byte的比较。因此可以直观的写出如下的比较函数代码:
 
 ```go
 func EqualBytes(a, b []byte) bool {
@@ -42,18 +42,18 @@ BenchmarkEqual/64M-8 |  在8核下比较64Mb字符串 | 18        | 66481026 ns/
 
 如表所示，随着处理数据量的增加，耗时上升明显，当数据量达到4M时，耗时接近3.5毫秒(3496666 ns/op)，作为一个基础操作来讲性能表现较差。
 
-### 2. Go社区字符串比较的SIMD优化方案
+### 2. Go语言社区字符串比较的SIMD优化方案
 
-那么字符串比较的性能问题是否有优化的办法呢？本文就以Go社区对字符串比较的优化案例揭开SIMD技术优化的神秘面纱：  
+那么字符串比较的性能问题是否有优化的办法呢？本文就以Go语言社区对字符串比较的优化案例揭开SIMD技术优化的神秘面纱：  
 1. 优化的补丁在Go社区官网可见。  
 
 ![image](images/SIMDEqualCommitID.png)  
 
-由于优化前后的代码都是汇编，为便于读者学习代码，首先将上节的go代码例子与优化前的Equal汇编代码对比，通过如下直观的对比关系图来展示: 
+由于优化前后的代码都是汇编，为便于读者学习代码，首先将上节的Go代码例子与优化前的Equal汇编代码对比，通过如下直观的对比关系图来展示: 
 
 ![image](images/image-code-compare.png)
 
-如图所示，两者实现逻辑是对应的。此处对于一行go代码a[i]!=b[i]，需要四条汇编指令：
+如图所示，两者实现逻辑是对应的。此处对于一行Go代码a[i]!=b[i]，需要四条汇编指令：
 
 1. 两条取数指令，分别将切片数组a和b中的byte值取到寄存器中；
 2. 通过CMP(比较指令)对比两个寄存器中的值，根据比较结果更新[状态寄存器](https://baike.baidu.com/item/%E7%8A%B6%E6%80%81%E5%AF%84%E5%AD%98%E5%99%A8/2477799?fr=aladdin); 
@@ -215,16 +215,16 @@ not_equal:
 
 - 环境准备
 1. 硬件配置：鲲鹏(ARM64)云Linux服务器-[通用计算增强型KC1 kc1.2xlarge.2(8核|16GB)](https://www.huaweicloud.com/product/ecs.html)
-2. [Golang发行版 >= 1.12.1](https://golang.google.cn/dl/)，此处开发环境准备请参考文章：[Golang 在ARM64开发环境配置](https://github.com/OptimizeLab/docs/blob/master/tutorial/environment/go_dev_env/go_dev_env.md)
-3. [Golang github源码仓库](https://github.com/golang/go)下载，此处通过[Git安装和使用](https://git-scm.com/book/zh/v2)进行版本控制。
+2. [Go语言发行版 >= 1.12.1](https://golang.google.cn/dl/)，此处开发环境准备请参考文章：[Go在ARM64开发环境配置](https://github.com/OptimizeLab/docs/blob/master/tutorial/environment/go_dev_env/go_dev_env.md)
+3. [Go语言github源码仓库](https://github.com/golang/go)下载，此处通过[Git安装和使用](https://git-scm.com/book/zh/v2)进行版本控制。
 - 操作步骤
 如下操作包含在鲲鹏服务器上进行编译测试的全过程，本文已经找到了优化前后的两个提交记录，优化前的commit id:0c68b79和优化后的commit id:78ddf27，可以按如下步骤进行操作：
 
 ```bash
-# 找到一个放置go源码仓的目录，如/usr/local/src/exp
+# 找到一个放置Go源码仓的目录，如/usr/local/src/exp
 mkdir /usr/local/src/exp
 cd /usr/local/src/exp
-# 通过git工具拉取github代码托管平台上golang的代码仓
+# 通过git工具拉取github代码托管平台上Go的代码仓
 git clone https://github.com/golang/go
 # 进入源码目录
 cd /usr/local/src/exp/go/src
@@ -232,19 +232,19 @@ cd /usr/local/src/exp/go/src
 git checkout -b before-simd 0c68b79
 # 切换到分支before-simd，此时目录下的代码文件已经变成了优化前的版本
 git checkout before-simd
-# 编译go源码，生成go开发环境
+# 编译Go源码，生成Go开发环境
 bash make.bash
 # 把当前目录设置为GOROOT目录
 export GOROOT=/usr/local/src/exp/go
-# 使用go benchmark命令测试性能并记录在文件before-simd-bench.txt中
+# 使用Go benchmark命令测试性能并记录在文件before-simd-bench.txt中
 go test bytes -v -bench ^BenchmarkEqual$ -count=5 -run  ^$ > before-simd-bench.txt
 # 根据优化后的提交记录78ddf27创建一个新的分支after-simd，这个分支包含优化后的版本
 git checkout -b after-simd 78ddf27
 # 切换到分支after-simd，此时目录下的代码文件已经变成了优化后的版本
 git checkout after-simd
-# 再次编译go源码，生成go开发环境
+# 再次编译Go源码，生成Go开发环境
 bash make.bash
-# 使用go benchmark命令测试性能并记录在文件after-simd-bench.txt中
+# 使用Go benchmark命令测试性能并记录在文件after-simd-bench.txt中
 go test bytes -v -bench ^BenchmarkEqual$ -count=5 -run  ^$ > after-simd-bench.txt
 # benchstat 对比结果
 benchstat before-simd-bench.txt after-simd-bench.txt
