@@ -1,7 +1,8 @@
-# 基于并行化技术优化通用字符串比较性能
-[SIMD即单指令多数据流(Single Instruction Multiple Data)](https://en.wikipedia.org/wiki/SIMD)，通过一条指令同时对多个数据进行运算，能够有效提高CPU的运算速度，主要适用于计算密集型、数据相关性小的多媒体、数学计算、人工智能等领域。
+# 开源软件优化-应用CPU SIMD加速技术优化软件性能
+[SIMD](https://baike.baidu.com/item/SIMD/3412835?fr=aladdin)即单指令多数据流(Single Instruction Multiple Data)指令集，是通过一条指令同时对多个数据进行运算的硬件加速技术，能够有效提高CPU的运算速度，主要适用于计算密集型、数据相关性小的多媒体、数学计算、人工智能等领域。
 
-[Go](https://golang.org/doc/)是一种快速、静态类型的开源语言，可以用来轻松构建简单、可靠、高效的软件。包含垃圾回收的便利性和运行时反射的功能。他的并发机制使go程序可以在多核和联网机器中获得最大收益。目前已经包括丰富的基础库如数学库、加解密库、图像库、编解码等等。对于性能要求较高且编译器目前还不能优化的场景，Go语言通过在底层使用汇编技术进行了优化，其中最重要的就是SIMD技术。  
+[Go语言](https://golang.google.cn/dl/)是一种快速、静态类型的开源语言，可以用来轻松构建简单、可靠、高效的软件。目前已经包括丰富的基础库如数学库、加解密库、图像库、编解码等等，其中对于性能要求较高且编译器目前还不能优化的场景，Go语言通过在底层使用汇编技术进行了优化，其中最重要的就是SIMD技术。  
+
 本文通过Go语言开源社区在ARM硬件平台的优化案例，介绍应用ARM SIMD技术的方法。
 
 ### 1. 字符串比较的性能问题
@@ -9,7 +10,7 @@
 先看一个常见的问题，在各行各业的服务系统中，用户登录需要验证用户名或ID，订购货物需要对比货物ID，出行需要验证票号等等，这些都离不开字符串比较操作，字符串实际上就是字节数组，在Golang语言中可以表示成[]byte的形式，字符串的比较即两个数组中对应byte的比较。因此可以直观的写出如下的比较函数代码:
 
 ```go
-func EqualByteArrAB(a, b []byte) bool {
+func EqualBytes(a, b []byte) bool {
     if len(a) != len(b) {       //长度不等则返回false
         return false
     }
@@ -22,23 +23,24 @@ func EqualByteArrAB(a, b []byte) bool {
 }
 ```
 
-似乎看起来还不错，逻辑没有问题，但是这样的实现就够了吗？是否能满足所有的使用场景呢？本文通过性能测试来给出答案。通过[Go benchmark](https://golang.org/pkg/testing/)进行测试得出如下数据：
-用例名/(字节数组大小(字节)-核心数)|执行测试数量|每操作耗时 time/op|单位时间处理数据量
----|---|---|---|
-BenchmarkEqual/0-8   | 330669548 | 3.64 ns/op     |
-BenchmarkEqual/1-8   | 227632882 | 5.27 ns/op     | 189.74 MB/s
-BenchmarkEqual/6-8   | 132229749 | 9.09 ns/op     | 660.35 MB/s
-BenchmarkEqual/9-8   | 100000000 | 10.1 ns/op     | 893.80 MB/s
-BenchmarkEqual/15-8  | 83173801  | 14.4 ns/op     | 1041.32 MB/s
-BenchmarkEqual/16-8  | 79955283  | 15.0 ns/op     | 1069.79 MB/s
-BenchmarkEqual/20-8  | 67353938  | 17.8 ns/op     | 1124.26 MB/s
-BenchmarkEqual/32-8  | 45706566  | 26.2 ns/op     | 1219.49 MB/s
-BenchmarkEqual/4K-8  | 421956    | 2844 ns/op     | 1440.18 MB/s
-BenchmarkEqual/4M-8  | 334       | 3496666 ns/op  | 1199.52 MB/s
-BenchmarkEqual/64M-8 | 18        | 66481026 ns/op | 1009.44 MB/s
+似乎看起来还不错，逻辑没有问题，但是这样的实现就够了吗？是否能满足所有的使用场景呢？本文通过性能测试来给出答案。通过[Go benchmark](https://golang.google.cn/pkg/testing/)进行测试得出如下数据：
+用例名|用例解释|执行测试数量|每操作耗时 time/op|单位时间处理数据量
+---|---|---|---|---|
+BenchmarkEqual/0-8   |  在8核下比较0B字符串   | 330669548 | 3.64 ns/op     |
+BenchmarkEqual/1-8   |  在8核下比较1B字符串   | 227632882 | 5.27 ns/op     | 189.74 MB/s
+BenchmarkEqual/6-8   |  在8核下比较6B字符串   | 132229749 | 9.09 ns/op     | 660.35 MB/s
+BenchmarkEqual/9-8   |  在8核下比较9B字符串   | 100000000 | 10.1 ns/op     | 893.80 MB/s
+BenchmarkEqual/15-8  |  在8核下比较15B字符串  | 83173801  | 14.4 ns/op     | 1041.32 MB/s
+BenchmarkEqual/16-8  |  在8核下比较16B字符串  | 79955283  | 15.0 ns/op     | 1069.79 MB/s
+BenchmarkEqual/20-8  |  在8核下比较20B字符串  | 67353938  | 17.8 ns/op     | 1124.26 MB/s
+BenchmarkEqual/32-8  |  在8核下比较32B字符串  | 45706566  | 26.2 ns/op     | 1219.49 MB/s
+BenchmarkEqual/4K-8  |  在8核下比较4KB字符串  | 421956    | 2844 ns/op     | 1440.18 MB/s
+BenchmarkEqual/4M-8  |  在8核下比较4MB字符串  | 334       | 3496666 ns/op  | 1199.52 MB/s
+BenchmarkEqual/64M-8 |  在8核下比较64Mb字符串 | 18        | 66481026 ns/op | 1009.44 MB/s
 
-[注]ns/op:每次函数执行耗费的纳秒时间;MB/s:每秒处理的兆字节数据;ms:毫秒    
-如表所示，随着处理数据量的增加，耗时上升明显，当数据量达到4M时，耗时接近3.5ms(3496666 ns/op)，作为一个基础操作来讲性能表现较差。
+`[注]ns/op:每次函数执行耗费的纳秒时间;MB/s:每秒处理的兆字节数据;B:字节`      
+
+如表所示，随着处理数据量的增加，耗时上升明显，当数据量达到4M时，耗时接近3.5毫秒(3496666 ns/op)，作为一个基础操作来讲性能表现较差。
 
 ### 2. Go社区字符串比较的SIMD优化方案
 
@@ -58,8 +60,8 @@ BenchmarkEqual/64M-8 | 18        | 66481026 ns/op | 1009.44 MB/s
 如图所示，两者实现逻辑是对应的。此处对于一行go代码a[i]!=b[i]，需要四条汇编指令：
 
 1. 两条取数指令，分别将切片数组a和b中的byte值取到寄存器中；
-2. 通过比较指令CMP对比两个寄存器中的值，根据比较结果更新[状态寄存器](https://baike.baidu.com/item/%E7%8A%B6%E6%80%81%E5%AF%84%E5%AD%98%E5%99%A8/2477799?fr=aladdin); 
-3. 跳转指令BEQ根据状态寄存器值进行跳转，此处是等于则跳转到loop标签处，即如果相等则继续下一轮比较。   
+2. 通过CMP(比较指令)对比两个寄存器中的值，根据比较结果更新[状态寄存器](https://baike.baidu.com/item/%E7%8A%B6%E6%80%81%E5%AF%84%E5%AD%98%E5%99%A8/2477799?fr=aladdin); 
+3. BEQ(跳转指令)根据状态寄存器值进行跳转，此处是等于则跳转到loop标签处，即如果相等则继续下一轮比较。   
 
 
 现在可以正式开始分析Equal的SIMD优化版了，这里的核心思路是**通过单指令同时处理多个byte数据的方式，大幅减少数据加载和比较操作的指令条数**，发挥SIMD运算部件的算力，提升性能。
@@ -211,14 +213,14 @@ not_equal:
     MOVB ZR, (R8)
     RET
 ```
-上述优化代码中，使用VLD1(数据加载指令)一次加载64bytes数据到SIMD寄存器，再使用VCMEQ指令比较SIMD寄存器保存的数据内容得到结果，相比传统用的单字节比较方式，提高了64byte数据块的比较性能。大于16byte小于64byte块数据，使用一个SIMD寄存器一次处理16byte块的数据，小于16byte数据块使用通用寄存器保存数据，一次比较8\4\2\1byte的数据块。
+上述优化代码中，使用VLD1(数据加载指令)一次加载64bytes数据到SIMD寄存器，再使用VCMEQ(相等比较指令)比较SIMD寄存器保存的数据内容得到结果，相比传统用的单字节比较方式，提高了64byte数据块的比较性能。大于16byte小于64byte块数据，使用一个SIMD寄存器一次处理16byte块的数据，小于16byte数据块使用通用寄存器保存数据，一次比较8\4\2\1byte的数据块。
 
 ### 5. 动手实验
 感兴趣的读者可以根据下面的命令自己执行一遍，感受SIMD技术的强大。
 
 - 环境准备
 1. 硬件配置：鲲鹏(ARM64)云Linux服务器-[通用计算增强型KC1 kc1.2xlarge.2(8核|16GB)](https://www.huaweicloud.com/product/ecs.html)
-2. [Golang发行版 >= 1.12.1](https://golang.org/dl/)，此处开发环境准备请参考文章：[Golang 在ARM64开发环境配置](https://github.com/OptimizeLab/docs/blob/master/tutorial/environment/go_dev_env/go_dev_env.md)
+2. [Golang发行版 >= 1.12.1](https://golang.google.cn/dl/)，此处开发环境准备请参考文章：[Golang 在ARM64开发环境配置](https://github.com/OptimizeLab/docs/blob/master/tutorial/environment/go_dev_env/go_dev_env.md)
 3. [Golang github源码仓库](https://github.com/golang/go)下载，此处通过[Git安装和使用](https://git-scm.com/book/zh/v2)进行版本控制。
 - 操作步骤
 如下操作包含在鲲鹏服务器上进行编译测试的全过程，本文已经找到了优化前后的两个提交记录，优化前的commit id:0c68b79和优化后的commit id:78ddf27，可以按如下步骤进行操作：
@@ -256,7 +258,7 @@ git show 78ddf27
 ```
 ### 6. 优化结果
 
-如章节[动手实验]所述使用[Go benchmark](https://golang.org/pkg/testing/)记录优化前后的数据。获得结果后通过使用[Go benchstat](https://godoc.org/golang.org/x/perf/cmd/benchstat)进行优化前后的性能对比。结果如下表格： 
+如章节[动手实验]所述使用[Go benchmark](https://golang.google.cn/pkg/testing/)记录优化前后的数据。获得结果后通过使用[Go benchstat](https://github.com/golang/perf/tree/master/cmd/benchstat)进行优化前后的性能对比。结果如下表格： 
 
 用例名/(字节数组大小-核心数)|优化前每操作耗时 time/op|优化后每操作耗时 time/op|耗时对比|优化前单位时间处理数据量|优化后单位时间处理数据量|处理数据量对比
 ---|---|---|---|---|---|---|
