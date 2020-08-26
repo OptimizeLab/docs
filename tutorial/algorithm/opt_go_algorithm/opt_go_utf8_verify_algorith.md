@@ -1,9 +1,9 @@
-# 开源软件优化案例 - 并行化编程思想在编码验证算法的实践
+# 开源软件优化-并行化编程思想在编码验证算法的实践
 > 编码验证算法是一种验证数据序列编码格式的算法，比较典型的有UTF-8编码验证算法。UTF-8验证算法用于检查数据序列是否符合UTF-8编码规范，比如说对常用UTF-8编码的邮件、网页及应用数据做编码验证时，就可以使用UTF-8验证算法。   
-> 本文通过Go语言开源社区的UTF-8验证算法优化案例为例，讲解通用的算法分析、优化方法。
+> 本文以Go语言开源社区的UTF-8验证算法优化案例为例，讲解通用的算法分析、优化方法。
 
 ### 1. Go语言的UTF-8编码验证算法
-Go语言实现了UTF-8编码验证算法用于检查UTF-8编码数据，主要基于UTF-8的可变长编码特点设计了验证算法，[UTF-8编码](https://zh.wikipedia.org/zh/UTF-8)使用1到4个字节为每个字符编码，[ASCII编码](https://zh.wikipedia.org/wiki/ASCII)属于UTF-8编码长度为1个字节的情况。
+Go语言实现了UTF-8编码验证算法用于检查UTF-8编码数据，主要基于UTF-8的可变长编码特点设计了验证算法，[UTF-8编码](https://baike.baidu.com/item/UTF-8)使用1到4个字节为每个字符编码，[ASCII编码](https://baike.baidu.com/item/ASCII)属于UTF-8编码长度为1个字节的情况。
 UTF-8验证算法针对这个特点，先取一个字符判断是否属于ASCII编码，再检查是否属于其他类型的UTF-8编码。代码如下：
 ```go 
 // 优化前的UTF-8验证算法，先取一个字节检查是否为ASCII，再验证字符是否属于其他类型的UTF-8编码
@@ -80,15 +80,18 @@ func Valid(p []byte) bool {
 ![image](images/utf8-Optimize-before.PNG)  
 优化后的汇编代码如下：  
 ![image](images/utf8-Optimize-after.PNG)  
-分析发现，优化前的代码，一次只能取一个byte数据到寄存器进行编码验证，而优化后的代码，一次可以取8个byte数据到寄存器进行编码验证，实现并行化处理数据的编码验证。  
+
+分析发现，优化前的代码，使用1个unit8变量存储数据进行编码验证，对应到汇编代码使用`MOVBU`指令取一个B(1个byte)的数据到寄存器R4，一次验证1个byte数据的编码。
+优化后的代码，使用2个unit32变量存储数据进行编码验证，对应到汇编代码使用`MOVWU`指令分别取一个W(4个byte)的数据到寄存器R3和R4，一次验证8个byte数据的编码。
+该优化方法**通过在Go语言代码中使用存储数据更多的unit32变量类型，增加了汇编指令中寄存器存储的数据量，在寄存器做比较操作时，实现了更多编码数据的并行化验证**。
 
 ### 4. 优化结果
-使用[Go Benchmark](https://golang.org/pkg/testing/)测试优化前后的算法性能，再用[benchstat](https://godoc.org/golang.org/x/perf/cmd/benchstat)对比优化前后的性能测试结果，整理到如下表格： 
+使用[Go benchmark](https://golang.google.cn/pkg/testing/)测试优化前后的算法性能，再用[Go benchstat](https://github.com/golang/perf/tree/master/cmd/benchstat)对比优化前后的性能测试结果，整理到如下表格： 
 
 测试项 | 测试用例 |优化前每操作耗时 time/op |	优化后每操作耗时 time/op | 耗时对比
 ---|---|---|---|---|
-BenchmarkValidTenASCIIChars-8 | 长度为10的byte切片 | 15.8 ns/op | 8.00 ns/op | 49.37%
-BenchmarkValidStringTenASCIIChars-8 | 长度为10的字符串 | 12.8 ns/op | 8.04 ns/op | 37.19%
+BenchmarkValidTenASCIIChars-8 | 长度为10的byte切片 | 15.8 ns/op | 8.00 ns/op | -49.37%
+BenchmarkValidStringTenASCIIChars-8 | 长度为10的字符串 | 12.8 ns/op | 8.04 ns/op | -37.19%
 
 [注] `-8`表示函数运行时的GOMAXPROCS值，`ns/op`表示函数每次执行的平均纳秒耗时。
 
