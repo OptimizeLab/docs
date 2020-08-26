@@ -78,47 +78,107 @@ func main() {
 ### 2. Golang官方仓库准备
 
 Golang是一个开源的项目，每个人都可以贡献代码，下面我们讲解如何获取官方仓库
+
 ```bash
 $ git clone https://go.googlesource.com/go
 $ cd go/src
 ```
+
 根据Commit ID可以自由创建分支进行测试，如下通过ID: 0c68b79创建了名称为test-simd的分支
+
 ```bash
 $ git checkout -b test-simd 0c68b79
 ```
+
 从源码编译并测试Golang
+
 ```bash
 $ cd go/src
 $ bash all.bash 
 ```
-编译后我们将在go/bin目录下获得go工具
 
-### 3 使用benchmark获取性能分析报告
+编译后我们将在go/bin目录下获得go工具。
 
-设置临时环境变量（仅在本条命令中有效），并使用新编译的 Go 执行测试用例，当然这里也可以直接使用第一节中安装的go发布版来执行测试用例
-```bash
-$ GOROOT=`pwd`/..; $GOROOT/bin/go test bytes -v -bench ^BenchmarkEqual$ -run ^$ -cpuprofile=cpu.out
-goos: linux
-goarch: arm64
-pkg: bytes
-BenchmarkEqual/0-8              500000000               3.84 ns/op
-BenchmarkEqual/1-8              300000000               5.44 ns/op       183.74 MB/s
-BenchmarkEqual/6-8              100000000               10.0 ns/op       598.26 MB/s
-BenchmarkEqual/9-8              100000000               12.4 ns/op       728.51 MB/s
-BenchmarkEqual/15-8             100000000               17.0 ns/op       880.77 MB/s
-BenchmarkEqual/16-8             100000000               17.8 ns/op       901.06 MB/s
-BenchmarkEqual/20-8             100000000               20.9 ns/op       956.05 MB/s
-BenchmarkEqual/32-8              50000000               30.5 ns/op      1050.11 MB/s
-BenchmarkEqual/4K-8                500000               3176 ns/op      1289.51 MB/s
-BenchmarkEqual/4M-8                   500            3468668 ns/op      1209.20 MB/s
-BenchmarkEqual/64M-8                   20           53439570 ns/op      1255.79 MB/s
-PASS
-ok      bytes   18.907s
+### 3 .使用benchmark获取性能分析
+
+benchmark基准测试是测量一个程序在固定工作负载下的性能。在Go语言中，基准测试以Benchmark为前缀并且带有一个 *testing.B 类型的参数。
+
+#### 1，Go源码包中有对应的基准测试程序
+
+基准测试的代码文件必须以_test.go结尾，基准测试的函数必须以Benchmark开头。
+
+首先进入文件目录：
+
 ```
-结果被保存在 cpu.out 文件中
+go/src
+```
 
-#### 4  使用pprof工具进一步分析性能
+在对标准库的函数进行基准测试的时候可以在命令行执行以下命令，就可以执行你指定的包中所有以Benchmark开头的测试文件：
+
+```
+go test xxx/yyy -v -bench ^Benchmark -benchmem -count n -run ^$ >> zzz.txt
+```
+
+`注：`
+
+`xxx/yyy：表示进行基准测试的包所在的目录文件，例如：math/bits；`
+
+`n：表示对测试执行几次基准测试`
+
+`zzz.txt：表示将计算得到的信息保存在zzz.txt文件中；`
+
+#### 2，Go源码包中没有对应的基准测试程序
+
+如果在Go标准库中并没有指定函数的基准测试，或者你需要自己写一个函数的基准测试，那么你需要满足以下规则：
+
+1. 基准测试的代码文件必须以_test.go结尾，基准测试函数以Benchmark开头；
+
+2. 基准测试函数只有一个参数，即b *testing.B，且无返回值，那么基准测试名为：
+
+   ```
+   func BenchmarkFUNCNAME(b *testing.B)
+   ```
+
+3. 将被测试的代码放在最后的循环中
+
+4. 自己编写基准测试程序举例如下：
+
+   ```go
+   package test
+   
+   import (
+       "testing"
+   )
+   
+   func add(a, b int) int {
+       return a + b
+   }
+   
+   func BenchmarkAdd(b *testing.B) {
+       for i := 0; i < b.N; i++ {
+           _ = add(i, i)
+       }
+   }
+   ```
+
+然后保存文件。
+
+进入文件所在目录下，在命令行输入以下命令：
+
+```
+go test -v -bench ^Benchmark . -benchmem -count n -run ^$ >> xxx.txt
+```
+
+`注：`
+
+`n：表示测试样本数据`
+
+`xxx.txt：表示将测试结果存储在xxx.txt文件中`
+
+### 4  使用pprof工具进一步分析性能
+
 通过 go 提供的性能分析工具 pprof 操作 cpu.out 文件，我们可以轻松查看并分析对 cpu 性能消耗大的函数。
+
 ```bash
 $ go tool pprof cpu.out
 File: bytes.test
@@ -135,7 +195,9 @@ Showing top 3 nodes out of 8
      4.06s 20.37% 92.22%     17.49s 87.76%  bytes_test.bmEqual.func1 /home/chan/go/src/bytes/bytes_test.go
      1.37s  6.87% 99.10%      2.31s 11.59%  bytes_test.BenchmarkEqual.func1 /home/chan/go/src/bytes/bytes_test.go
 ```
+
 此处 " top 3 " 列出了 cpu 消耗前 3 的函数。其中各项含义如下：
+
 - flat：当前函数占用CPU的耗时  
 - flat%: 当前函数占用CPU的耗时百分比  
 - sun%：函数占用CPU的耗时累计百分比  
@@ -144,6 +206,7 @@ Showing top 3 nodes out of 8
 - 最后一列：函数名称  
 
 我们通过 pprof 的 list 命令可以查看 bytes.Equal 方法内部的详细耗时信息：
+
 ```bash
 (pprof) list bytes.Equal
 Total: 19.93s
@@ -180,12 +243,16 @@ ROUTINE ======================== bytes.Equal in /home/xxx/go/src/runtime/asm_arm
          .          .    893:   MOVW    $0, R0
          .          .    894:   RET
 ```
+
 上面结果展示的是 bytes.Equal 汇编代码的耗时情况，该汇编代码在 runtime 包的 asm_arm64.s 文件中，可以看到主要的耗时热点是 CMP 指令和 MOVBU.P 指令
 
 ### 5. 使用benchstat对比优化前后的性能数据
+
 有时我们做了一个优化，希望比较下优化前后两组benchmark数据，这时候我们可以使用benchstat，
+
 ```bash
 benchstat before-optimize after-optimize
 ```
+
 获得类似如下的性能对比结果
 ![image](images/SIMDEqualResult.png)  
