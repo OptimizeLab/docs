@@ -36,7 +36,7 @@ BenchmarkEqual/20-8  |  在8核下比较20B字符串  | 67353938  | 17.8 ns/op  
 BenchmarkEqual/32-8  |  在8核下比较32B字符串  | 45706566  | 26.2 ns/op     | 1219.49 MB/s
 BenchmarkEqual/4K-8  |  在8核下比较4KB字符串  | 421956    | 2844 ns/op     | 1440.18 MB/s
 BenchmarkEqual/4M-8  |  在8核下比较4MB字符串  | 334       | 3496666 ns/op  | 1199.52 MB/s
-BenchmarkEqual/64M-8 |  在8核下比较64Mb字符串 | 18        | 66481026 ns/op | 1009.44 MB/s
+BenchmarkEqual/64M-8 |  在8核下比较64MB字符串 | 18        | 66481026 ns/op | 1009.44 MB/s
 
 `[注]ns/op:每次函数执行耗费的纳秒时间;MB/s:每秒处理的兆字节数据;B:字节`      
 
