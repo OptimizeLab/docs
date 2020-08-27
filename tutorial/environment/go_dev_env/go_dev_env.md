@@ -213,14 +213,14 @@ pkg: bytes
 BenchmarkEqual/0-8      500000000                3.66 ns/op
 BenchmarkEqual/1-8      200000000                9.44 ns/op      105.98 MB/s
 BenchmarkEqual/6-8      200000000                9.83 ns/op      610.54 MB/s
-BenchmarkEqual/9-8      100000000               10.7 ns/op       844.26 MB/s
-BenchmarkEqual/15-8             100000000               10.4 ns/op      1441.79 MB/s
-BenchmarkEqual/16-8             200000000                9.91 ns/op     1614.26 MB/s
-BenchmarkEqual/20-8             100000000               12.0 ns/op      1667.08 MB/s
-BenchmarkEqual/32-8             100000000               11.4 ns/op      2799.28 MB/s
-BenchmarkEqual/4K-8             10000000               212 ns/op        19319.24 MB/s
-BenchmarkEqual/4M-8                 2000            614830 ns/op        6821.89 MB/s
-BenchmarkEqual/64M-8                 200           6779486 ns/op        9898.81 MB/s
+BenchmarkEqual/9-8      100000000                10.7 ns/op      844.26 MB/s
+BenchmarkEqual/15-8     100000000                10.4 ns/op     1441.79 MB/s
+BenchmarkEqual/16-8     200000000                9.91 ns/op     1614.26 MB/s
+BenchmarkEqual/20-8     100000000                12.0 ns/op     1667.08 MB/s
+BenchmarkEqual/32-8     100000000                11.4 ns/op     2799.28 MB/s
+BenchmarkEqual/4K-8     10000000                  212 ns/op    19319.24 MB/s
+BenchmarkEqual/4M-8     2000                   614830 ns/op     6821.89 MB/s
+BenchmarkEqual/64M-8    200                   6779486 ns/op     9898.81 MB/s
 PASS
 ok      bytes   21.121s
 ```
@@ -293,7 +293,7 @@ benchstat old.txt new.txt
 
 在[官方](https://github.com/golang/perf/tree/master/cmd/benchstat)这个例子中给出了，工具使用举例。
 
-例子：
+示例：
 
 如果优化前的benchmark性能测试文件为old.txt， 并且信息如下：
 
@@ -371,7 +371,7 @@ GOSSAFUNC=xxxx go build yyyy.go
 
 点击之后，会在当前目录下生成一个ssa.html文件，使用浏览器打开即可查看各个优化过程中代码变化情况。
 
-举例：
+示例：
 
 进入Go目录：
 
