@@ -1,7 +1,5 @@
 # OptimizeLab Overlay 开发者指南
-> 充分发挥硬件性能
-
-OptimizeLab Overlay 软件仓库当前主要针对 aarch64 架构提供关键应用和函数库的高性能预编译版本，采用 Launchpad PPA 的方式提供，以 Ubuntu 18.04 LTS 和 Ubuntu 20.04 LTS 为基础版本。这份指南旨在说明参与这个仓库开发所需要的技术和方法，以便能够迅速上手开展工作。
+> OptimizeLab Overlay 软件仓库当前主要针对 aarch64 架构提供关键应用和函数库的高性能预编译版本，采用 Launchpad PPA 的方式提供，以 Ubuntu 18.04 LTS 和 Ubuntu 20.04 LTS 为基础版本。这份指南旨在说明参与这个仓库开发所需要的技术和方法，以便能够迅速上手开展工作。
 
 ## 基础技能
 
