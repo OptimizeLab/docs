@@ -92,8 +92,6 @@
 
 除以上步骤外，在进入正式仓库前还要进行人工检视，以确保各步骤验证无退行问题、未引入新问题。
 
-### debci 自动测试要求
-
 
 ## 基础技能
 
@@ -241,6 +239,17 @@ API 是 Application Programming Interface 的缩写，ABI 是 Application Binary
 
 更多关于性能优化的话题，参见 [OptimizeLab 系列文档](https://github.com/OptimizeLab/docs)
 
+### 软件编译过程中是否可以联网？
+
+软件编译过程中不允许联网，以便使编译结果保持确定性。在正式的编译平台上已采取技术措施阻止联网，本地开发测试时需要注意是否使用了网络，避免本地可以通过平台却无法通过的情况。
+
+### autopkgtest 是什么，如何使用？
+
+autopkgtest 是按照 Debian 社区定义的 DEP-8 标准进行的测试用例设计，不同于软件自带的单元测试，这些测试更多面向于在发行版进行集成后对集成结果进行测试，允许自动化的 CI 测试系统针对不同版本的各软件进行自动化的交叉组合测试，以便发现软件更新时可能对其他软件造成的影响。在 Debian 项目中具体使用 debci 平台来完成整套动作执行。
+
+* [DEP-8 标准](https://dep-team.pages.debian.net/deps/dep8/)
+* [autopkgtest 设计和说明文档](https://salsa.debian.org/ci-team/autopkgtest/raw/master/doc/README.package-tests.rst)
+* [debci 集成平台文档](https://ci.debian.net/doc/)
 
 ## 脚注
 
