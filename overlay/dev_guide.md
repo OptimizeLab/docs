@@ -1,21 +1,6 @@
 # OptimizeLab Overlay 开发者指南
 > OptimizeLab Overlay 软件仓库当前主要针对 aarch64 架构提供关键应用和函数库的高性能预编译版本，采用 Launchpad PPA 的方式提供，以 Ubuntu 18.04 LTS 和 Ubuntu 20.04 LTS 为基础版本。这份指南旨在说明参与这个仓库开发所需要的技术和方法，以便能够迅速上手开展工作。
 
-## 基础技能
-
-### Debian 软件打包入门
-
-Ubuntu 系统基于 Debian 开发，使用 `.deb` 软件包格式，因此掌握 Debian 软件打包是参与 OptimizeLab Overlay 的最基本技能。要掌握 Debian 软件打包的基本知识，请阅读以下文档：
-
-* [Debian 新维护人员手册（汉语）](https://www.debian.org/doc/manuals/maint-guide/index.zh-cn.html)
-* [Debian 打包教程（英语，PDF）](https://www.debian.org/doc/manuals/packaging-tutorial/packaging-tutorial.en.pdf)
-
-入门教程之外，还推荐阅读以下这些文档。其中讲述了 Debian 的技术标准、对自由软件的价值观，以及在过往经历中许多开发者总结下的最佳实践，是官方开发人员必读文档。
-
-* [Debian Policy Manual](https://www.debian.org/doc/debian-policy/)
-* [Debian 自由软件指导方针](https://www.debian.org/social_contract#guidelines)
-* [Debian 开发人员参考指南](https://www.debian.org/doc/manuals/developers-reference/index.en.html)
-
 ## 仓库架构
 
 仓库目前分为四个组件：`base`, `database`, `media` 和 `science`。随着开发工作的不断进行，我们还将根据用户反馈和开发计划增设更多分类。
@@ -56,14 +41,30 @@ Ubuntu 系统基于 Debian 开发，使用 `.deb` 软件包格式，因此掌握
 4. 不同场景、类别的软件存放在单独的子仓内，各子仓之间除 `base` 和 `common` 外不得有依存关系
 5. 对于最终应用软件，应检视其所有反向以来软件，评估并验证存在进程调用关系情况下的行为兼容性
 
-## FAQ
+## 升级维护策略
 
-### 如何提交补丁
+升级维护策略与所针对的软件有强相关性，软件仓库内的软件包，需要持续跟踪安全问题的更新，并在条件允许的情况下为软件包提供质量更新。Ubuntu 官方版本已修复的安全和质量问题，100% 需要经过辨别确保在本仓库中也进行了修复。
 
-现阶段请使用 issue 功能将补丁作为附件提交，目前已计划将所有支持的软件包使用 git 管理，届时可以使用 Pull Request 方式提交补丁。
+* 进行升级维护时，采用最小化修改原则，在条件允许的情况下仅做修复目标问题的必要改动
+* 对于 Ubuntu 官方版本已修复的安全和质量问题，100% 经过辨别确保仓库版本也进行了修复
+* 对于原发行版不涉及的问题，跟踪上游安全和质量问题列表，及时做出维护响应
+* 不进行影响系统安全模型的修改，遵循原发行版的仓库完整性、自动升级功能、启动安全性、默认网络安全、应用程序隔离等安全设计
+* 对密码学相关软件和可能影响 FIPS 相容性的变更，采取审慎态度，默认不予引入
 
-### 现在是如何发布的，是否有计划使用 CI？
-当前为手动触发向 Staging 仓库提交编译，编译通过后拷贝至实际仓库。待所有支持的软件包使用 git 管理功能上线后，将通过 CI 进行自动触发 Staging 仓库的持续编译。
+## 基础技能
+
+### Debian 软件打包入门
+
+Ubuntu 系统基于 Debian 开发，使用 `.deb` 软件包格式，因此掌握 Debian 软件打包是参与 OptimizeLab Overlay 的最基本技能。要掌握 Debian 软件打包的基本知识，请阅读以下文档：
+
+* [Debian 新维护人员手册（汉语）](https://www.debian.org/doc/manuals/maint-guide/index.zh-cn.html)
+* [Debian 打包教程（英语，PDF）](https://www.debian.org/doc/manuals/packaging-tutorial/packaging-tutorial.en.pdf)
+
+入门教程之外，还推荐阅读以下这些文档。其中讲述了 Debian 的技术标准、对自由软件的价值观，以及在过往经历中许多开发者总结下的最佳实践，是官方开发人员必读文档。
+
+* [Debian Policy Manual](https://www.debian.org/doc/debian-policy/)
+* [Debian 自由软件指导方针](https://www.debian.org/social_contract#guidelines)
+* [Debian 开发人员参考指南](https://www.debian.org/doc/manuals/developers-reference/index.en.html)
 
 ### 如何确认反向依赖关系
 
@@ -87,6 +88,20 @@ Ubuntu 系统基于 Debian 开发，使用 `.deb` 软件包格式，因此掌握
 ### 什么是 API，什么是 ABI？
 
 API 是 Application Programming Interface 的缩写，ABI 是 Application Binary Interface 的缩写。API 兼容性所解决的问题是 API 不变的情况下，一段代码可以调用任意版本的函数库进行编译得到可用的程序；ABI 兼容性则表示，一段代码使用任意兼容版本编译获得的二进制文件，可以动态调用 ABI 兼容的其他版本二进制函数库文件（so、dll等）而无需重新编译。
+
+其中应用程序的 ABI 具体通常包括如下几个方面：
+* 调用约定
+* 数据类型
+* 传参方法
+* 返回值获得方法
+* 程序库函数
+* 二进制目标文件格式
+* 异常处理规程
+* 字节码序列化方式
+* 寄存器使用
+* ......
+
+在 Linux 平台上，除字节码类应用外，通常情况下大多数常规条件时默认兼容的（目标文件格式、函数调用规程等），主要需要考虑程序的符号表中的函数数据类型、传参、返回值等内容。
 
 ### 如何查看一个动态链接的二进制文件的符号表？
 
@@ -127,7 +142,7 @@ API 是 Application Programming Interface 的缩写，ABI 是 Application Binary
  ......
 ```
 
-### 对于 C++ 程序，如何获得真实的符号表？
+### 对于 C++ 程序，如何获得可读的符号表？
 
 由于 C++ 程序的符号表中编译器 encode 了更多的信息，会对一般的人工分析造成干扰，此时可以使用 `c++filt` 命令进行 decode，例如我们对 _libboost system.so.1.67.0_ 进行解析，同样排除 GLIBC、C++ 标准库的影响，取前 30 行：
 
@@ -166,15 +181,25 @@ API 是 Application Programming Interface 的缩写，ABI 是 Application Binary
  ......
 ```
 
+在一些情况下，解码相同的符号表存在不同的 encode 结果，原因有多种可能，一般是是编译器版本区别、采用了不同的 C++ 规范版本等，这样的情况属于符号表不同，需要注意辨别。
+
+## FAQ
+
+### 如何提交补丁
+
+现阶段请使用 issue 功能将补丁作为附件提交，目前已计划将所有支持的软件包使用 git 管理，届时可以使用 Pull Request 方式提交补丁。
+
+### 现在是如何发布的，是否有计划使用 CI？
+当前为手动触发向 Staging 仓库提交编译，编译通过后拷贝至实际仓库。待所有支持的软件包使用 git 管理功能上线后，将通过 CI 进行自动触发 Staging 仓库的持续编译。
+
+
 ### 仓库中软件提升性能主要采用的方法有哪些？
 
 1. 调整编译参数，进行有针对的效率优化。编译参数可能是架构相关部分，以便生成更优质的二进制代码，也可能是架构无关的，但对程序运行总体收益较好。
 2. 引入效率提升补丁，同时维护与原有版本的 API 和 ABI 兼容性。
 3. 升级软件版本，引入新特性的同时使用上游更高效的软件版本，适用于 backport 补丁工作量过大、软件包本身反向依赖较少的情况。
 
-### 升级维护策略是怎样的？
-
-升级维护策略与所针对的软件有强相关性，OptimizeLab Overlay 软件仓库内的软件包，需要持续跟踪安全问题的更新，并在条件允许的情况下为软件包提供质量更新。Ubuntu 官方版本已修复的安全和质量问题，100% 需要经过辨别确保在本仓库中也进行了修复。
+更多关于性能优化的话题，参见 [OptimizeLab 系列文档](https://github.com/OptimizeLab/docs)
 
 
 ## 脚注
