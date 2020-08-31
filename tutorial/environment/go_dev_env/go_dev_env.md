@@ -4,7 +4,7 @@
 
 Go语言开发包是go语言的实现，内容包括版本的语法、编译、运行、标准库以及其他一些必要资源。
 
-1） Goland语言包官网：http://goland.org/dl/。
+1） Goland语言包官网：https://golang.google.cn/dl/
 
 2） 下载打开页面之后根据自己的需求选择对应平台下载，本次安装选择[go1.14.2.linux-arm64](https://dl.google.com/go/go1.14.2.linux-arm64.tar.gz) ,是发行版1.14.2对应linux系统、arm64处理器架构的特定版本。如下图所示：
 
