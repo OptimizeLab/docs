@@ -1,4 +1,6 @@
-在完成OpenCV 4.4.0在openEular上的下载和安装步骤，距离正式使用还需要进行环境配置。 
+# OpenCV 4.4.0在openEuler上的环境配置和测试
+
+在完成OpenCV 4.4.0在openEuler上的下载和安装步骤，距离正式使用还需要进行环境配置。 
 
 ## 配置环境 
 
@@ -83,12 +85,13 @@ pkg-config opencv --modversion
 
 在OpenCV内部集成了很多测试demo，可以通过执行这些demo看是否完成opencv的配置。 
 
-```plain
 命令进入到samples文件夹 
-cd opencv-4.4.0/samples 
+
+```plain
+cd opencv-4.4.0/samples
+```
 可以看到有各种语言的samples 
 
-```
 >android                directx  opencl               swift                           winrt 
 >CMakeLists.example.in  dnn      opengl               tapi                            winrt_universal 
 >CMakeLists.txt         gpu      openvx               va_intel                        wp8 
