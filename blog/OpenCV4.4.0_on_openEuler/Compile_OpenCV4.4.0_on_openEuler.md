@@ -45,10 +45,10 @@ SIFT（Scale-Invariant Feature Transform，尺度不变特征变换）算法移�
 
 另外，本次版本更新还释放一个重大信号，OpenCV 计划在下一版本中将授权协议由BSD 2 迁移到 Apache 2，这将消除将 OpenCV 用于商业产品时可能面临的专利风险，对开发者更友好！ 
 
-# 在openEular上编译OpenCV 4.4.0 
+# 在openEuler上编译OpenCV 4.4.0 
 
 
-下面将介绍在 openEular 上编译 OpenCV 4.4.0 的流程，并记录了其中遇到的一些坑及避坑指南。 
+下面将介绍在 openEuler 上编译 OpenCV 4.4.0 的流程，并记录了其中遇到的一些坑及避坑指南。 
 
 首先创建文件夹
 ```plain
@@ -127,20 +127,18 @@ cmake -version
 ```
 返回内容如下所示，表示安装已经完成。 
 
-```
+
 >cmake version 3.17.2 
 >CMake suite maintained and supported by Kitware (kitware.com/cmake). 
 #### 2.提示缺少OpenSSL 
 
->cmake 编译时，提示缺少 OpenSSL 
-CMake Error: 
+cmake 编译时，提示缺少 OpenSSL 
+> CMake Error: 
 >  Could NOT find OpenSSL, try to set the path to OpenSSL root folder in the system variable OPENSSL_ROOT_DIR (missing: OPENSSL_CRYPTO_LIBRARY)  
 
  
 
-```plain
 进入指定目录下载安装 
-```
 ```plain
 cd /usr/local/src 
 wget https://www.openssl.org/source/openssl-1.1.1f.tar.gz 
