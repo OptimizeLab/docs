@@ -1,4 +1,4 @@
-# 在openEular上编译OpenCV 4.4.0 
+# 在openEuler上编译OpenCV 4.4.0 
 OpenCV（Open Source Computer Vision Library）是跨平台计算机视觉和机器学习软件库，基于 BSD 许可授权发行，可以在商业和研究领域中免费使用。 
 
 OpenCV 用 C++ 和 C 语言编写，具有 C ++、Python、Java、C#、Ruby、GO 和 MATLAB 等接口，并支持 Windows、Linux、Android 和 Mac OS 等操作系统。OpenCV 可用于开发实时的图像处理、计算机视觉以及模式识别程序。 
@@ -14,43 +14,44 @@ SIFT（Scale-Invariant Feature Transform，尺度不变特征变换）算法移�
 #### 2、DNN模块更新 
 
 
-* 改进的图层/激活/ 支持 更多模型： 
+* 改进的图层/激活/支持更多模型： 
 
-    * 支持 最新的  Y olo  v4 ： [＃17148](https://github.com/opencv/opencv/issues/17148)
-    * ONNX ：支持  Resnet_backbone （Torchvision） [＃16887](https://github.com/opencv/opencv/pull/16887)
+    * 支持最新的 Yolo v4 ： [＃17148](https://github.com/opencv/opencv/issues/17148)
+    * ONNX ：支持 Resnet_backbone （Torchvision）[＃16887](https://github.com/opencv/opencv/pull/16887)
     * 支持 EfficientDet 模型 ： [＃17384](https://github.com/opencv/opencv/pull/17384)
 * 新示例demo： 
-    * 增 加 文本识别示例： [C](https://github.com/opencv/opencv/pull/16941)[ ](https://github.com/opencv/opencv/pull/16941)[++](https://github.com/opencv/opencv/pull/16941)/ [P](https://github.com/opencv/opencv/pull/16955)[ython](https://github.com/opencv/opencv/pull/16955)
+    * 增加文本识别示例： [C++](https://github.com/opencv/opencv/pull/16941)/ [Python](https://github.com/opencv/opencv/pull/16955)
     * 支持 FlowNet2 optical flow： [＃16575](https://github.com/opencv/opencv/pull/16575)
 * 英特尔推理引擎后端 ： 
     * 增加了对 OpenVINO 2020.3 LTS / 2020.4 版本的支持 
     * 计划在下一版本中删除对 NN Builder API 的支持 
-* 大量针对 CUDA的 支持 和优化 
+* 大量针对CUDA的支持和优化 
 #### 3、G-API模块 
 
 
-* 在 OpenCV 后端引入了用于 状态 内核的新 API ：GAPI_OCV_KERNEL_ST 
-* 在  G-API 模块中增加了 面向视频的操作 ：goodFeaturesToTrack，buildOpticalFlowPyramid，calcOpicalFlowPyrLK 
-* 增 加了图像处理内核 ：Laplacian 和双边过滤器 
-* 修复 了 G-API 的 OpenCL 后端中的 潜在崩溃 
+* 在 OpenCV 后端引入了用于状态内核的新 API ：GAPI_OCV_KERNEL_ST 
+* 在 G-API 模块中增加了面向视频的操作 ：goodFeaturesToTrack，buildOpticalFlowPyramid，calcOpicalFlowPyrLK 
+* 增加了图像处理内核 ：Laplacian 和双边过滤器 
+* 修复了 G-API 的 OpenCL 后端中的潜在崩溃 
 #### 4、其他更新 
 
 
-* Obj-C/Swift  绑定 ： [＃17165](https://github.com/opencv/opencv/pull/17165)
+* Obj-C/Swift 绑定 ： [＃17165](https://github.com/opencv/opencv/pull/17165)
 * BIMEF :  生物启发的多重曝光融合框架，用于弱光图像增强 
 * 为文本检测添加笔画宽度变换(Stroke Width Transform,SWT) 
 * … 
 
-此外，OpenCV 3.4.11 也已发布，并带有一些 bug 修复和改进。详细内容可查看更新说明：​​​​ [https://github.com/opencv/opencv/wiki/ChangeLog](https://github.com/opencv/opencv/wiki/ChangeLog)
+此外，OpenCV 3.4.11 也已发布，并带有一些 bug 修复和改进。详细内容可查看更新说明： [https://github.com/opencv/opencv/wiki/ChangeLog](https://github.com/opencv/opencv/wiki/ChangeLog)
 
 另外，本次版本更新还释放一个重大信号，OpenCV 计划在下一版本中将授权协议由BSD 2 迁移到 Apache 2，这将消除将 OpenCV 用于商业产品时可能面临的专利风险，对开发者更友好！ 
 
 # 在openEular上编译OpenCV 4.4.0 
 
-```plain
+
 下面将介绍在 openEular 上编译 OpenCV 4.4.0 的流程，并记录了其中遇到的一些坑及避坑指南。 
 
- 首先创建文件夹 
+首先创建文件夹
+```plain
 cd /usr/local/src 
 mkdir opencv 
 cd opencv 
@@ -58,16 +59,22 @@ cd opencv
 从 OpenCV 社区获取 OpenCV-4.4.0 的源码包 
 ```plain
 wget https://github.com/opencv/opencv/archive/4.4.0.tar.gz 
+```
 解压，进入并创建 build 文件夹 
+```plain
 tar -zxvf 3.0.0.tar.gz 
 cd opencv-3.0.0/ 
 mkdir build 
 cd build/ 
+```
 使用  cmake  编译
+```plain
 cmake .. 
-make -j 8 
+make -j8 
 make install 
+```
 查看安装 OpenCV 所生成的库文件和头文件。 
+```plain
 ll /usr/local/lib 
 ```
 >total 36M 
@@ -102,17 +109,22 @@ wget https://cmake.org/files/v3.17/cmake-3.17.2.tar.gz
 若从 cmake 官网下载速度较慢，可以在 gitee 码云提供的 src-openEuler 项目中找到适应openEuler 的 cmake 压缩包： [https://gitee.com/src-openeuler/cmake](https://gitee.com/src-openeuler/cmake)
 下载地址 [https://gitee.com/src-openeuler/cmake/blob/master/cmake-3.17.2.tar.gz](https://gitee.com/src-openeuler/cmake/blob/master/cmake-3.17.2.tar.gz)
 
-```plain
 解压并进入安装目录 
+```plain
 cd /usr/local/src 
 tar -zxvf cmake-3.17.2.tar.gz 
 cd cmake-3.17.2 
+```
 安装 cmake 
+```plain
 ./configure 
 make 
 make install 
+```
 测试 cmake 是否安装完成 
+```plain
 cmake -version 
+```
 返回内容如下所示，表示安装已经完成。 
 
 ```
@@ -128,6 +140,8 @@ CMake Error:
 
 ```plain
 进入指定目录下载安装 
+```
+```plain
 cd /usr/local/src 
 wget https://www.openssl.org/source/openssl-1.1.1f.tar.gz 
 ```
@@ -139,7 +153,9 @@ wget https://www.openssl.org/source/openssl-1.1.1f.tar.gz
 ```plain
 tar -xvf openssl-1.1.1f.tar.gz 
 cd openssl-1.1.1f 
+```
 安装 OpenSSL 
+```plain
 ./config 
 make 
 make install 
