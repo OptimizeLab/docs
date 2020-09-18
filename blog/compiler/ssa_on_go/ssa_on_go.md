@@ -1,14 +1,14 @@
 # 编译器学习-静态单赋值(SSA)形式的生成算法分析
 > 静态单赋值(SSA)是编译器优化时使用的中间表示形式，本文以Go语言编译器为例，通过分析Go编译器从抽象语法树(AST)形式生成SSA形式的过程源码，帮助读者初步了解SSA的表示形式和生成算法。
 
-在[SSA](https://baike.baidu.com/item/%E9%9D%99%E6%80%81%E5%8D%95%E8%B5%8B%E5%80%BC%E5%BD%A2%E5%BC%8F/22723427?fr=aladdin)形式中每个变量只被赋值一次，[借由简化变数的特性，来进行简化及改进编译器最佳化的结果。](https://zh.wikipedia.org/wiki/%E9%9D%99%E6%80%81%E5%8D%95%E8%B5%8B%E5%80%BC%E5%BD%A2%E5%BC%8F) Go编译器在将AST转为SSA表示形式后，会通过多轮PASS算法进行优化，包含死代码消除、分支化简、copy删除、Phi删除、降级(转为体系结构相关)、状态寄存器分配、寄存器分配等等。因此变换为SSA形式是后续编译优化的起始和前提。
+在[SSA](https://baike.baidu.com/item/%E9%9D%99%E6%80%81%E5%8D%95%E8%B5%8B%E5%80%BC%E5%BD%A2%E5%BC%8F/22723427?fr=aladdin)形式中每个变量只被赋值一次，[借由简化变数的特性，来进行简化及改进编译器最佳化的结果。](https://zh.wikipedia.org/wiki/%E9%9D%99%E6%80%81%E5%8D%95%E8%B5%8B%E5%80%BC%E5%BD%A2%E5%BC%8F) Go编译器在将AST转为SSA表示形式后，会通过多轮PASS([编译器的遍](https://baike.baidu.com/item/%E7%BC%96%E8%AF%91%E7%A8%8B%E5%BA%8F/8290180))算法进行优化，包含死代码消除、分支化简、copy删除、Phi删除、降级(转为体系结构相关)、状态寄存器分配、寄存器分配等等。因此变换为SSA形式是后续编译优化的起始和前提。
 
 ### 1. SSA在编译器的应用
 编译器在对代码进行优化时，通常会转为一种或几种中间态，试想一下，如果没有这个过程，对于M种语言，N个体系结构，可能需要编写M*N种编译器优化代码，开发和维护的工作量都是难以承受的。但是如果能在源码和目标体系结构之间增加一层中间表示形式，那么只需要将编程语言转为这种中间表示形式，为中间表示形式编写通用优化算法，之后再根据具体的体系结构进行优化，生成体系结构相关的表示即可。[LLVM](https://llvm.org/)正是采用了这种设计。
 
-Go编译器也不例外，在编译过程中，它包含多个中间表示形式(IR)：语法树(syntax tree)、AST(抽象语法树)、SSA、基于plan9的Go汇编等。本文要介绍的是编译器如何生成SSA表示的相关内容，对其他编译过程感兴趣的读者可以参考文章[Go程序编译过程](https://github.com/OptimizeLab/docs/blog/compiler/go-program-compile-process.md)。该文章对Go语言的编译过程进行了总体介绍。
+Go编译器也不例外，在编译过程中，它包含多个中间表示形式(IR)：语法树(syntax tree)、[AST(抽象语法树)](https://zh.wikipedia.org/wiki/%E6%8A%BD%E8%B1%A1%E8%AA%9E%E6%B3%95%E6%A8%B9)、SSA、基于plan9的Go汇编等。本文要介绍的是编译器如何生成SSA表示的相关内容，对其他编译过程感兴趣的读者可以参考文章[Go程序编译过程](https://github.com/OptimizeLab/docs/blog/compiler/go-program-compile-process.md)，该文章对Go语言的编译过程进行了总体介绍。
 
-在Go编译器中以函数为单位表示成SSA形式，类似于下图，图中包含多个块，用b1、b2、b3.......表示，每个块中包含数量不定的表达式，生成SSA的过程需要找到变量的定义和使用，给变量的每一个定义取一个别名，使他们满足单赋值形式，然后为变量的每一次使用找到定义点，如图中所示，但是会出现图中块b4不能确定x定义的情况，即在某一个使用的汇合点不确定到底使用的是哪个定义，这时就需要插入Phi函数，他表示在这个使用点还不确定究竟使用哪一个定义，定义点来源作为到这里就保持了每个变量只被定义一次的特性：
+在Go编译器中以函数为单位表示成SSA形式，类似于下图，图中包含多个块，用b1、b2、b3.......表示，每个块中包含数量不定的表达式，生成SSA的过程需要找到变量的定义和使用，给变量的每一个定义取一个别名，使他们满足静态单赋值形式，然后为变量的每一次使用找到定义点，如图中所示，但是会出现图中块b4不能确定x定义的情况，即在某一个使用的汇合点不确定到底使用的是哪个定义，这时就需要插入Phi函数，他表示在这个使用点还不确定究竟使用哪一个定义，定义点来源作为到这里就保持了每个变量只被定义一次的特性：
 
 ![image](images/convert_to_ssa.png) 
 
@@ -43,7 +43,7 @@ GOSSAFUNC=showssa go tool compile -l main.go
 
 上图左侧第一幅是根据Block关系画出的控制流图(CFG)，可以看到每个块中包含一些语句，表示块中执行的操作；
 
-图中的v(variable)表示变量，每个变量具有一个单赋值形式，Phi函数表明有多个前驱定义了这个变量，如b2块中的v7 (8) = Phi <int> v5 v29 (c[int])，变量v7表示的是源码中的c，此处v5和v29是Phi函数的参数，他们也是SSA形式的变量，分别定义在前驱块b1和b6中。
+图中的v(variable)表示变量，每个变量具有一个静态单赋值形式，Phi函数表明有多个前驱定义了这个变量，如b2块中的v7 (8) = Phi <int> v5 v29 (c[int])，变量v7表示的是源码中的c，此处v5和v29是Phi函数的参数，他们也是SSA形式的变量，分别定义在前驱块b1和b6中。
 
 
 
@@ -69,7 +69,7 @@ GOSSAFUNC=showssa go tool compile -l main.go
 
 ![image](images/simple_and_effec_for_ssa.png) 
 
-2. 当count(block) > 500时采用算法[A Linear Time Algorithm for Placing ϕ-Nodes](https://pp.info.uni-karlsruhe.de/uploads/publikationen/braun13cc.pdf)。该算法使用了一种有效的、近似线性的算法。首先构造了一个DJ-graph结构图，他在支配树的基础上增加了深度值Level和Join-edge(J-edge，是满足条件的边：存在一条边x->y，且x不严格支配y)，从深度最高向深度最低的节点遍历，对于每个节点x，如果在以x为根节点的子树中存在某个节点y，y节点有一条到子树外部节点z的J-edge边，且z的Level小于x的Level，则在节点z插入Phi函数。
+2. 当count(block) > 500时采用算法[A Linear Time Algorithm for Placing ϕ-Nodes](https://pp.info.uni-karlsruhe.de/uploads/publikationen/braun13cc.pdf)。该算法使用了一种有效的、近似线性的算法。首先构造了一个DJ-graph结构图，他在支配树的基础上增加了深度值Level和Join-edge(J-edge，是满足条件的边：存在一条边x->y，且x不严格支配y)，从深度最高向深度最低的节点遍历，对于每个节点x(如图中12)，如果在以x为根节点的子树中存在某个节点y(如图中13)，y节点有一条到子树外部节点z(如图中3和15)的J-edge边，且z的Level小于x的Level，则在节点z插入Phi函数。
 
 ![image](images/dj-graph.png) 
 
@@ -81,7 +81,7 @@ GOSSAFUNC=showssa go tool compile -l main.go
 ### 3. Go编译器生成SSA的源码分析
 本章源码分析主要讲述从编译器生成AST后，将AST转为SSA形式的过程，可以理解为两个关键过程：1. 包含Node的抽象语法树转为包含块和Value的控制流图；2. 插入Phi函数
 
-`[注]由于代码数量庞大，因此只列出了利于理解关键过程的部分代码：
+`[注]由于代码数量庞大，因此只列出了利于理解关键过程的部分代码。
 
 1. 将抽象语法树转为SSA形式，并执行PASS进行代码优化的核心函数是buildssa：
 
