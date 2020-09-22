@@ -1,12 +1,14 @@
-## golang 编解码库入门
+## 深入解读编解码算法
+本文以go语言的编解码库实现为样例，展开分析几种常用的编解码算法。
 
 ### 概述
 
-golang编解码库实现了ascii85\base32\base64\hex\binary\asn1\xml\json\gob\csv\pem等11种编解码算法用于数据处理，这11个编解码包各自实现了数据与byte数组和文本形式相互转换的接口。
+Go语言编解码库实现了ascii85、base32、base64、hex、binary等10+种编解码算法，本文将以go语言编解码库为样例，深入分析几种常用的编解码库算法。
+下面将依次介绍ASCII类编码算法、二进制\16进制编码算法、pem证书编码、cvs编码。
 
 ### ASCII 编码类（ascii85,base32,base64)
 
-golang支持ascii85（也叫base85），base32，base64等编码算法，主要用于二进制数据与可打印的ascii字符之间的编码转换。
+Go语言支持ascii85（也叫base85），base32，base64等编码算法，主要用于二进制数据与可打印的ascii字符之间的编码转换。
 
 #### 技术原理
 
@@ -15,7 +17,23 @@ ASCII85：包含85个可打印ASCII字符，使用5个ascii字符编码4个字�
 算法核心代码如下，每次处理4个字节的二进制数据，然后对4字节的数据进行5次除以85取余数操作，余数+“！”得到编码后的ascii字符。
 
 ```go
-// Special case: zero (!!!!!) shortens to z.
+// 拆分4个字节到uint32中，再重新包装到base85编码的5个字节中
+var v uint32
+switch len(src) {
+default:
+    v |= uint32(src[3])
+    fallthrough
+case 3:
+    v |= uint32(src[2]) << 8
+    fallthrough
+case 2:
+    v |= uint32(src[1]) << 16
+    fallthrough
+case 1:
+    v |= uint32(src[0]) << 24
+}
+
+// 特殊情况，全零组编码为'z'而不是'!!!!!'
 if v == 0 && len(src) >= 4 {
     dst[0] = 'z'
     dst = dst[1:]
@@ -23,21 +41,23 @@ if v == 0 && len(src) >= 4 {
     n++
     continue
 }
-
-// Otherwise, 5 base 85 digits starting at !.
+.
+// 转化为base85编码的数据
 for i := 4; i >= 0; i-- {
     dst[i] = '!' + byte(v%85) //取余数后+“！”使得编码后的ASCII字符在“！”到“u”之间
     v /= 85
 }
 ```
 
-base32：包含32个可打印ASCII字符，吗，每个数字用5个bit位表示（2^5=32），golang 的base32算法实现了RFC 4648标准规范中，使用`encodeStd = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"` 作为编码的可打印ASCII字符。
+base32：base32编码包含32个可打印ASCII字符，每个base32字符可用5个bit位表示（2^5=32），Go语言的base32算法实现了RFC
+4648标准规范中，使用`encodeStd = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"`
+作为32个base32编码字符。
 
-算法核心代码如下：每次编码5个字节的二进制数据 5*8 到8个ascii字符 ，首先取src中最高位的数组的高5位与操作`0x1F`存储到b[7]，`enc.encode[b[7]&31]`与操作后映射到上面提到的ASCII字符集encodeStd，得到一个ASCII字符，以此类推向后编码。在对处理的中间数据做编码映射的时候，代码采用了循环展开的方式，利用流水线技术一次并发处理8个数据的映射，提高了编码的性能。
+算法核心代码如下：每次编码5个字节的二进制数据 5*8 到8个ascii字符
+，首先取src中最高位的数组的高5位与操作`0x1F`存储到b[7]，`enc.encode[b[7]&31]`与操作后映射到上面提到的ASCII字符集encodeStd，得到一个ASCII字符，以此类推向后编码。在对处理的中间数据做编码映射的时候，代码采用了循环展开的方式，提高编码性能。
 
 ```go
-// Unpack 8x 5-bit source blocks into a 5 byte
-// destination quantum
+// 拆分5个8bit字节数据块到8个5-bit数据块中
 switch len(src) {
     default:
     b[7] = src[4] & 0x1F
@@ -62,10 +82,10 @@ switch len(src) {
     b[0] = src[0] >> 3
 }
 
-// Encode 5-bit blocks using the base32 alphabet
+// 使用base32 字母表编码5-bit数据块
 size := len(dst)
-if size >= 8 {  // 循环展开，高效利用流水线技术，提高了并发处理机能，加速数据编码
-    // Common case, unrolled for extra performance
+if size >= 8 {
+    // 循环展开，提高编码性能
     dst[0] = enc.encode[b[0]&31]
     dst[1] = enc.encode[b[1]&31]
     dst[2] = enc.encode[b[2]&31]
@@ -81,13 +101,16 @@ if size >= 8 {  // 循环展开，高效利用流水线技术，提高了并发�
 }
 ```
 
-base64：包含64个可打印ASCII字符，每个数字用6个bit位表示（2^6=64），golang 的base64算法实现了RFC 4648标准规范中，使用`encodeStd = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"` 作为编码的可打印ASCII字符。
+base64：base64编码包含64个可打印ASCII字符，每个base64字符可用6个bit位表示（2^6=64），Go语言的base64算法实现了RFC
+4648标准规范中，使用`encodeStd =
+"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"` 
+作为编码的可打印ASCII字符。
 
 算法核心代码如下：每次编码3个字节的二进制数据 3*8 到 4个ascii字符，首先把3个byte存储到一个unit变量中，然后每次取6位输出一个ascii字符，最终得到4个ascii字符。
 
 ```go
 for si < n {
-    // Convert 3x 8bit source bytes into 4 bytes
+    // 转换3个字节的数据块（3*8-bit）到 4个字节的数据块（4*6-bit)
     val := uint(src[si+0])<<16 | uint(src[si+1])<<8 | uint(src[si+2])
 
     dst[di+0] = enc.encode[val>>18&0x3F]
@@ -106,19 +129,10 @@ ascii85主要应用于Adobe的PostScript（文档的打印件） 、PDF文件格
 
 base32、base64的应用于处理文本数据，表示、传输、存储一些二进制数据等。
 
-#### 优化空间分析
 
-- 无汇编代码，编解码库不接受新增汇编或汇编优化
-- 不涉及cache优化，不存在矩阵数据或块数据运算
-- 已使用流水线优化，在上述算法的代码中，已经有意识的使用循环展开等方法进行了流水线优化
-- 暂未识别出算法优化空间，ascii编码类算法不算复杂，目前的算法实现已经比较精简。
-- 社区issue有提到base64的性能问题，是可尝试的优化方向之一。
+### 二进制/十六进制编码
 
-
-
-### 二进制/十六进制编码类
-
-golang支持二进制/十六进制编码算法，用于数字和字节序列之间的互相转换。
+Go语言支持二进制/十六进制编码算法，用于数字和字节序列之间的互相转换。
 
 #### 技术原理
 
@@ -129,7 +143,8 @@ hex：十六进制编码算法编码每个字节为2个16进制字符，每个16
 ```go
 func Encode(dst, src []byte) int {
 	j := 0
-	for _, v := range src { //循环src源数组，每次编码一个byte为2个16进制符号，直到跳出循环
+	for _, v := range src { 
+		//循环src源数组，每次编码一个byte为2个16进制符号，直到跳出循环
 		dst[j] = hextable[v>>4]
 		dst[j+1] = hextable[v&0x0f]
 		j += 2
@@ -144,13 +159,13 @@ binary：二进制包实现了数字与字节序列之间转换，支持bool, in
 
 ```go
 func (littleEndian) Uint64(b []byte) uint64 {
-	_ = b[7] // bounds check hint to compiler; see golang.org/issue/14808
+	_ = b[7] // 边界检查
 	return uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 |
 		uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56 // 小端序低地址位存放低位字节
 }
 
 func (littleEndian) PutUint64(b []byte, v uint64) {
-	_ = b[7] // early bounds check to guarantee safety of writes below
+	_ = b[7] // 边界检查
 	b[0] = byte(v)
 	b[1] = byte(v >> 8)
 	b[2] = byte(v >> 16)
@@ -166,21 +181,14 @@ func (littleEndian) PutUint64(b []byte, v uint64) {
 
 二进制/十六进制编码广泛应用于计算机、通信数据传输、数字电路等领域。
 
-#### 优化空间分析
 
-- 无汇编、cache优化空间
-- 流水线和算法优化空间小，通过循环展开等方式优化算法会增加代码的复杂性，接收可能性小。（代码注释中提到更追求简单而不是性能）
-- 社区issue数量少（<5个），可做的工作少。
-
-
-
-### pem\csv\asn1编解码包
+### pem证书编码
 
 #### 技术原理
 
-pem：golang实现了pem数据编码算法，主要应用在TLS密钥和证书中。
+pem：Go语言实现了pem数据编码算法，主要应用在TLS密钥和证书中。
 
-golang中一个pem数据结构包括Type 、headers、Bytes3个字段，分别表示pem证书的类型、头部、内容。
+Go语言中一个pem数据结构包括Type 、headers、Bytes3个字段，分别表示pem证书的类型、头部、内容。
 
 ```go
 type Block struct {
@@ -190,13 +198,11 @@ type Block struct {
 }
 ```
 
-golang的pem包实现了pem证书与Block数据结构之间的互相转换，pem.Decode方法解析pem数据到Block块，核心代码分解如下：
+Go语言的pem包实现了pem证书与Block数据结构之间的互相转换，pem.Decode方法解析pem数据到Block块，核心代码分解如下：
 
 ```go
 func Decode(data []byte) (p *Block, rest []byte) {
-	// pemStart begins with a newline. However, at the very beginning of
-	// the byte array, we'll accept the start string without it.
-    // 识别pem数据开始表示“-----BEGIN”
+    // 识别pem数据开始标志“-----BEGIN”
 	rest = data
 	if bytes.HasPrefix(data, pemStart[1:]) {
 		rest = rest[len(pemStart)-1 : len(data)]
@@ -220,8 +226,6 @@ func Decode(data []byte) (p *Block, rest []byte) {
     
 	// 获取数据数据的头部key-value
 	for {
-		// This loop terminates because getLine's second result is
-		// always smaller than its argument.
 		if len(rest) == 0 {
 			return nil, data
 		}
@@ -232,7 +236,6 @@ func Decode(data []byte) (p *Block, rest []byte) {
 			break
 		}
 
-		// TODO(agl): need to cope with values that spread across lines.
 		key, val := line[:i], line[i+1:]
 		key = bytes.TrimSpace(key)
 		val = bytes.TrimSpace(val)
@@ -251,22 +254,20 @@ func Decode(data []byte) (p *Block, rest []byte) {
 		return decodeError(data, rest)
 	}
 	p.Bytes = p.Bytes[:n]
-
-	// the -1 is because we might have only matched pemEnd without the
-	// leading newline if the PEM block was empty.
 	_, rest = getLine(rest[endIndex+len(pemEnd)-1:])
 
 	return
 }
 ```
-
 pem.Encode方法编码block数据块到pem数据，感兴趣可以自行查看源码 [encoding/pem/pem.go](https://github.com/golang/go/blob/master/src/encoding/pem/pem.go) 
 
 
-
-CSV：golang的encoding/csv包用于读写逗号分隔值（comma-separated value, [csv](https://en.wikipedia.org/wiki/Comma-separated_values)） 的数据，csv文件格式常应用于表格数据的交换 。
-
-cvs包实现了(r *Reader) Read、(r *Reader) ReadAll、(r *Reader) Write、(r *Reader) WriteAll 方法用于处理逗号分隔值数据的读写。
+### CSV编码介绍
+CSV：Go语言的encoding/csv包用于读写逗号分隔值（comma-separated value,
+[csv](https://en.wikipedia.org/wiki/Comma-separated_values)）
+的数据，csv文件格式常应用于表格数据的交换 。cvs包实现了(r *Reader)
+Read、(r *Reader) ReadAll、(r *Reader) Write、(r *Reader) WriteAll
+方法用于处理逗号分隔值数据的读写。
 
 样例程序如下：输入是逗号分隔值数据，使用csv.NewReader声明一个reader指针r，调用r.Read()读取每一行的数据输出到record 字符串数组中并打印。
 
@@ -280,7 +281,8 @@ Ken,Thompson,ken
 	r := csv.NewReader(strings.NewReader(in))
 
 	for {
-        record, err := r.Read() // 使用r.Read()方法读取读取数据输出到字符串数组中
+		// 使用r.Read()方法读取读取数据输出到字符串数组中
+        record, err := r.Read() 
 		if err == io.EOF {
 			break
 		}
@@ -297,28 +299,4 @@ Ken,Thompson,ken
 	// [Robert Griesemer gri]
 }
 ```
-
 csv包的读写方法调用底层bufio包的ReadSlice接口做数据读写，再对特殊符号做了处理，如逗号“，”，换行符 “\r\n”|"\n"，这里不展开分析，感兴趣可以自行查看源码 [encoding/csv](https://github.com/golang/go/tree/master/src/encoding/csv) 。
-
-ASN1：golang实现了[DES](https://en.wikipedia.org/wiki/Data_Encryption_Standard)编码的[ASN.1](https://zh.wikipedia.org/wiki/ASN.1)数据结构的解析。
-
-#### 优化空间分析
-
-- 无汇编、cache优化空间
-
-- 流水线和算法优化空间小 
-
-- pem算法无社区issue，csv和ASN.1算法的社区issue较多，可尝试从issue切入优化。
-
-  
-
-### xml/json/gob 编解码包
-
-xml：golang的XML包实现了XML 1.0解析器，可以理解XML名称空间。
-
-json：golang的JSON包实现了RFC 7159中定义的JSON编解码。
-
-gob：golang的gob包管理gobs二进制值在编码器和解码器之间的交换。典型使用场景是传递RPC中的参数和结果。
-
-xml/json/gob编解码器的技术原理不在此展开分析，将在下一篇编解码文章详细展开分析。
-
