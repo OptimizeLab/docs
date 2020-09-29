@@ -92,7 +92,7 @@ x <  1  =>  x == 0  #当x小于1时，为x等于0
 ```
 然后再cmd/internal/ssa/gen这个路径下输入
 ```
-go run *.gon
+go run *.go
 ```
 编译器会在根据ARM64.rules中之前写的编译规则在ARM64Ops.go自动生成go的代码
 
